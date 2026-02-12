@@ -1,0 +1,68 @@
+{
+  "target_url": "https://example.com/",
+  "auth": null,
+  "crawl": {
+    "target_url": "https://example.com/",
+    "max_pages": 10,
+    "max_depth": 5,
+    "include_patterns": [],
+    "exclude_patterns": [],
+    "auth_credentials": null,
+    "auth_url": null,
+    "wait_for_idle": true,
+    "viewport": {
+      "width": 1280,
+      "height": 720,
+      "name": "desktop"
+    },
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4.1 Safari/605.1.15"
+  },
+  "categories": [
+    "functional",
+    "visual",
+    "security"
+  ],
+  "max_tests_per_run": 30,
+  "max_execution_time_seconds": 1800,
+  "max_parallel_contexts": 3,
+  "ai_model": "claude-opus-4-6",
+  "ai_max_fallback_calls_per_test": 3,
+  "ai_max_planning_tokens": 32000,
+  "staleness_threshold_days": 7,
+  "history_retention_runs": 20,
+  "visual_diff_tolerance": 0.15,
+  "viewports": [
+    {
+      "width": 1280,
+      "height": 720,
+      "name": "desktop"
+    },
+    {
+      "width": 768,
+      "height": 1024,
+      "name": "tablet"
+    },
+    {
+      "width": 375,
+      "height": 812,
+      "name": "mobile"
+    }
+  ],
+  "security_xss_payloads": [
+    "<script>alert(1)</script>",
+    "\"><img src=x onerror=alert(1)>",
+    "javascript:alert(1)",
+    "'-alert(1)-'",
+    "<svg onload=alert(1)>"
+  ],
+  "security_max_probe_depth": 2,
+  "report_formats": [
+    "html",
+    "json"
+  ],
+  "report_output_dir": "./qa-reports",
+  "capture_video": false,
+  "include_url_patterns": [],
+  "exclude_url_patterns": [],
+  "hints": []
+}
