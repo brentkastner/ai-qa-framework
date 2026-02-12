@@ -151,7 +151,7 @@ class TestFrameworkConfig:
         assert config.max_tests_per_run == 100
         assert config.max_execution_time_seconds == 1800
         assert config.max_parallel_contexts == 3
-        assert config.ai_model == "claude-sonnet-4-20250514"
+        assert config.ai_model == "claude-opus-4-6"
         assert config.ai_max_fallback_calls_per_test == 3
         assert config.ai_max_planning_tokens == 32000
         assert config.staleness_threshold_days == 7

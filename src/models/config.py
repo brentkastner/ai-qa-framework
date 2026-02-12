@@ -71,7 +71,7 @@ class FrameworkConfig(BaseModel):
     max_parallel_contexts: int = 3
 
     # AI settings
-    ai_model: str = "claude-sonnet-4-20250514"
+    ai_model: str = "claude-opus-4-6"
     ai_max_fallback_calls_per_test: int = 3
     ai_max_planning_tokens: int = 32000  # Increased to support large test plans
 

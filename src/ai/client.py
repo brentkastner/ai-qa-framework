@@ -38,7 +38,7 @@ def _get_debug_dir() -> Path:
 class AIClient:
     """Wrapper around the Anthropic Claude API."""
 
-    def __init__(self, model: str = "claude-sonnet-4-20250514", max_tokens: int = 32000):
+    def __init__(self, model: str = "claude-opus-4-6", max_tokens: int = 32000):
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
             raise EnvironmentError(

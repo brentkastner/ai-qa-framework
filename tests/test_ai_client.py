@@ -24,7 +24,7 @@ class TestAIClient:
         """Test AIClient initializes with valid API key."""
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
             client = AIClient()
-            assert client.model == "claude-sonnet-4-20250514"
+            assert client.model == "claude-opus-4-6"
             assert client.max_tokens == 32000
             assert client.call_count == 0
             mock_anthropic.assert_called_once()
