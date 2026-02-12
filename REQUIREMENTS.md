@@ -1,5 +1,9 @@
 # AI QA Framework - Requirements & Features Documentation
 
+> **📚 Looking for a simpler introduction?** Check out [OVERVIEW.md](./OVERVIEW.md) for a friendly, high-level explanation of what this framework does and why. This document contains the complete technical specification for developers.
+
+---
+
 ## Table of Contents
 - [Overview](#overview)
 - [Core Architecture](#core-architecture)
