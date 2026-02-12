@@ -1,0 +1,12 @@
+.DS_Store
+.qa-framework
+qa-reports
+runs
+
+
+# Don't check in the config file
+qa-config.json
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
