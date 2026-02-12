@@ -4,6 +4,7 @@
 qa-framework
 qa-reports
 runs
+.coverage
 
 
 # Don't check in the config file
