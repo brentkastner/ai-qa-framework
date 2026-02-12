@@ -27,5 +27,8 @@ def generate_json_report(
         for r in regressions
     ]
 
+    # Create parent directories if they don't exist
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
     with open(output_path, "w") as f:
         json.dump(report, f, indent=2, default=str)

@@ -1,5 +1,7 @@
+.claude
 .DS_Store
 .qa-framework
+qa-framework
 qa-reports
 runs
 
@@ -10,3 +12,6 @@ qa-config.json
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
+
+# Test cache
+.pytest_cache
