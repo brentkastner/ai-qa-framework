@@ -38,7 +38,7 @@ REQUIRED RESPONSE FORMAT (plain JSON, no markdown fences):
       "steps": [ (same Action schema as preconditions) ],
       "assertions": [
         {
-          "assertion_type": "element_visible | element_hidden | text_contains | text_equals | url_matches | screenshot_diff | element_count | network_request_made | no_console_errors | response_status",
+          "assertion_type": "element_visible | element_hidden | text_contains | text_equals | text_matches | url_matches | screenshot_diff | element_count | network_request_made | no_console_errors | response_status | ai_evaluate",
           "selector": "string or null",
           "expected_value": "string or null",
           "tolerance": "float or null",
@@ -61,6 +61,13 @@ REQUIRED RESPONSE FORMAT (plain JSON, no markdown fences):
 5. **Selectors:** Prefer data-testid attributes, then ARIA roles/labels, then stable CSS selectors. Avoid fragile positional selectors.
 6. **Test data:** Generate realistic test data for form fills. Use invalid data for negative tests (empty required fields, malformed emails, XSS payloads for security).
 7. **Budget:** Respect the max_tests limit. Allocate budget proportionally: ~50% functional, ~30% visual, ~20% security (adjustable by hints).
+8. **Assertion robustness:** Prefer behavioral/structural assertions over text matching. This is critical for reliable tests.
+   - After form submissions: assert URL changed (url_matches), form disappeared (element_hidden), or new UI appeared (element_visible). Do NOT assert for specific success/error text you have not observed on the site.
+   - For login flows: assert URL navigated away from the login page, or a logout/profile element appeared, rather than checking for "success" or "welcome" text.
+   - Use text_contains ONLY when you are confident the exact substring will appear (e.g., a page title visible in the site model).
+   - Use text_matches with regex patterns for flexible text matching (e.g., "Welcome.*|Dashboard|My Account" to match various post-login states).
+   - Use ai_evaluate when the expected outcome is ambiguous and best described as an intent (e.g., "user appears to be logged in", "form submission was accepted", "search results are displayed"). Set expected_value to a clear natural language intent description. The AI will judge the actual page state at runtime.
+   - NEVER guess what text a site will display after an action. If you cannot determine the exact text from the site model, use element_visible, url_matches, or ai_evaluate instead.
 
 Generate thorough but focused tests. Each test should verify one specific behavior."""
 

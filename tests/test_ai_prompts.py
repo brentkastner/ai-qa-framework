@@ -2,6 +2,7 @@
 
 import pytest
 
+from src.ai.prompts.evaluation import EVALUATION_SYSTEM_PROMPT, build_evaluation_prompt
 from src.ai.prompts.fallback import FALLBACK_SYSTEM_PROMPT, build_fallback_prompt
 from src.ai.prompts.planning import PLANNING_SYSTEM_PROMPT, build_planning_prompt
 from src.ai.prompts.summary import SUMMARY_SYSTEM_PROMPT, build_summary_prompt
@@ -250,3 +251,107 @@ class TestPromptIntegrity:
         """Test prompts use consistent terminology."""
         assert "assertion" in PLANNING_SYSTEM_PROMPT.lower()
         assert "selector" in FALLBACK_SYSTEM_PROMPT.lower()
+
+    def test_all_four_prompts_are_strings(self):
+        """Test all system prompts including evaluation are non-empty strings."""
+        prompts = [
+            FALLBACK_SYSTEM_PROMPT,
+            PLANNING_SYSTEM_PROMPT,
+            SUMMARY_SYSTEM_PROMPT,
+            EVALUATION_SYSTEM_PROMPT,
+        ]
+
+        for prompt in prompts:
+            assert isinstance(prompt, str)
+            assert len(prompt) > 0
+            assert prompt.strip() == prompt
+
+
+class TestEvaluationPrompts:
+    """Tests for evaluation prompts."""
+
+    def test_evaluation_system_prompt_exists(self):
+        """Test EVALUATION_SYSTEM_PROMPT is defined."""
+        assert isinstance(EVALUATION_SYSTEM_PROMPT, str)
+        assert len(EVALUATION_SYSTEM_PROMPT) > 100
+
+    def test_evaluation_system_prompt_mentions_key_terms(self):
+        """Test evaluation prompt mentions intent, verdict, and JSON."""
+        prompt_lower = EVALUATION_SYSTEM_PROMPT.lower()
+        assert "intent" in prompt_lower
+        assert "json" in prompt_lower
+        assert "passed" in prompt_lower
+        assert "confidence" in prompt_lower
+
+    def test_evaluation_system_prompt_requires_json(self):
+        """Test evaluation prompt requires JSON response."""
+        assert "JSON" in EVALUATION_SYSTEM_PROMPT
+
+    def test_evaluation_system_prompt_warns_against_text_guessing(self):
+        """Test evaluation prompt discourages matching specific text."""
+        prompt_lower = EVALUATION_SYSTEM_PROMPT.lower()
+        assert "success" in prompt_lower or "specific text" in prompt_lower
+
+    def test_build_evaluation_prompt_basic(self):
+        """Test building a basic evaluation prompt."""
+        prompt = build_evaluation_prompt(
+            intent="user appears to be logged in",
+            current_url="https://example.com/dashboard",
+            page_text_snippet="Welcome to your dashboard. Logout",
+        )
+
+        assert isinstance(prompt, str)
+        assert "user appears to be logged in" in prompt
+        assert "https://example.com/dashboard" in prompt
+        assert "Welcome to your dashboard" in prompt
+
+    def test_build_evaluation_prompt_truncates_long_text(self):
+        """Test evaluation prompt truncates very long page text."""
+        long_text = "x" * 5000
+        prompt = build_evaluation_prompt(
+            intent="page loaded",
+            current_url="https://example.com",
+            page_text_snippet=long_text,
+        )
+
+        # Should truncate to 3000 chars
+        assert len(prompt) < 5000 + 200  # some overhead for the prompt structure
+
+    def test_build_evaluation_prompt_includes_sections(self):
+        """Test evaluation prompt includes all expected sections."""
+        prompt = build_evaluation_prompt(
+            intent="form was submitted",
+            current_url="https://example.com/confirm",
+            page_text_snippet="Thank you",
+        )
+
+        assert "Intent" in prompt
+        assert "URL" in prompt
+        assert "Page Text" in prompt
+
+
+class TestPlanningPromptRobustness:
+    """Tests for assertion robustness guidelines in planning prompt."""
+
+    def test_planning_prompt_mentions_robustness(self):
+        """Test planning prompt includes assertion robustness guidance."""
+        assert "robustness" in PLANNING_SYSTEM_PROMPT.lower()
+
+    def test_planning_prompt_discourages_text_guessing(self):
+        """Test planning prompt warns against guessing text."""
+        assert "NEVER guess" in PLANNING_SYSTEM_PROMPT
+
+    def test_planning_prompt_mentions_ai_evaluate(self):
+        """Test planning prompt mentions ai_evaluate assertion type."""
+        assert "ai_evaluate" in PLANNING_SYSTEM_PROMPT
+
+    def test_planning_prompt_mentions_text_matches(self):
+        """Test planning prompt mentions text_matches assertion type."""
+        assert "text_matches" in PLANNING_SYSTEM_PROMPT
+
+    def test_planning_prompt_prefers_behavioral_assertions(self):
+        """Test planning prompt recommends behavioral assertions."""
+        prompt_lower = PLANNING_SYSTEM_PROMPT.lower()
+        assert "url_matches" in prompt_lower
+        assert "element_hidden" in prompt_lower
+        assert "element_visible" in prompt_lower

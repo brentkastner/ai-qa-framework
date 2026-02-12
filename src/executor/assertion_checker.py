@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import base64
 import logging
 import re
 from pathlib import Path
 
 from playwright.async_api import Page
 
+from src.ai.client import AIClient
+from src.ai.prompts.evaluation import EVALUATION_SYSTEM_PROMPT, build_evaluation_prompt
 from src.models.config import FrameworkConfig
 from src.models.test_plan import Assertion
 
@@ -28,6 +31,7 @@ async def check_assertion(
     console_errors: list[str] | None = None,
     network_log: list[dict] | None = None,
     config: FrameworkConfig | None = None,
+    ai_client: AIClient | None = None,
 ) -> AssertionResult:
     """Evaluate a single assertion and return the result."""
     logger.debug("Checking assertion: %s", assertion.assertion_type)
@@ -41,6 +45,8 @@ async def check_assertion(
                 return await _check_text_contains(page, assertion)
             case "text_equals":
                 return await _check_text_equals(page, assertion)
+            case "text_matches":
+                return await _check_text_matches(page, assertion)
             case "url_matches":
                 return _check_url_matches(page, assertion)
             case "screenshot_diff":
@@ -53,6 +59,8 @@ async def check_assertion(
                 return _check_no_console_errors(console_errors)
             case "response_status":
                 return _check_response_status(assertion, network_log)
+            case "ai_evaluate":
+                return await _check_ai_evaluate(page, assertion, evidence_dir, ai_client)
             case _:
                 return AssertionResult(False, f"Unknown assertion type: {assertion.assertion_type}")
     except Exception as e:
@@ -91,14 +99,14 @@ async def _check_text_contains(page: Page, assertion: Assertion) -> AssertionRes
         try:
             el = await page.wait_for_selector(assertion.selector, timeout=5000)
             text = await el.text_content() or "" if el else ""
-            if assertion.expected_value in text:
+            if assertion.expected_value.lower() in text.lower():
                 return AssertionResult(True, f"Found '{assertion.expected_value}'")
             return AssertionResult(False, f"'{assertion.expected_value}' not in text")
         except Exception as e:
             return AssertionResult(False, str(e))
     else:
         body = await page.text_content("body") or ""
-        if assertion.expected_value in body:
+        if assertion.expected_value.lower() in body.lower():
             return AssertionResult(True, f"Found '{assertion.expected_value}' in page")
         return AssertionResult(False, f"'{assertion.expected_value}' not in page")
 
@@ -112,6 +120,26 @@ async def _check_text_equals(page: Page, assertion: Assertion) -> AssertionResul
         if text == assertion.expected_value:
             return AssertionResult(True, "Text matches")
         return AssertionResult(False, f"Expected '{assertion.expected_value}', got '{text}'")
+    except Exception as e:
+        return AssertionResult(False, str(e))
+
+
+async def _check_text_matches(page: Page, assertion: Assertion) -> AssertionResult:
+    """Regex pattern match against element or page text."""
+    if not assertion.expected_value:
+        return AssertionResult(False, "No expected_value (regex pattern)")
+    try:
+        if assertion.selector:
+            el = await page.wait_for_selector(assertion.selector, timeout=5000)
+            text = await el.text_content() or "" if el else ""
+        else:
+            text = await page.text_content("body") or ""
+
+        if re.search(assertion.expected_value, text, re.IGNORECASE):
+            return AssertionResult(True, f"Pattern '{assertion.expected_value}' matched in text")
+        return AssertionResult(False, f"Pattern '{assertion.expected_value}' not found in text")
+    except re.error as e:
+        return AssertionResult(False, f"Invalid regex pattern: {e}")
     except Exception as e:
         return AssertionResult(False, str(e))
 
@@ -239,3 +267,67 @@ def _check_response_status(assertion: Assertion, network_log: list[dict] | None)
         if req.get("status") == expected:
             return AssertionResult(True, f"Found response with status {expected}")
     return AssertionResult(False, f"No response with status {expected}")
+
+
+async def _check_ai_evaluate(
+    page: Page, assertion: Assertion, evidence_dir: Path, ai_client: AIClient | None
+) -> AssertionResult:
+    """Use AI to judge whether a natural language intent is satisfied by the current page state."""
+    if not assertion.expected_value:
+        return AssertionResult(False, "No intent specified for ai_evaluate (set expected_value)")
+
+    if not ai_client:
+        return AssertionResult(False, "ai_evaluate requires an AI client but none is available")
+
+    intent = assertion.expected_value
+
+    try:
+        # Capture page state
+        screenshot_path = evidence_dir / "ai_evaluate_screenshot.png"
+        await page.screenshot(path=str(screenshot_path))
+
+        with open(screenshot_path, "rb") as f:
+            img_b64 = base64.b64encode(f.read()).decode()
+
+        current_url = page.url
+
+        # Get page text, scoped to selector if provided
+        if assertion.selector:
+            try:
+                el = await page.wait_for_selector(assertion.selector, timeout=3000)
+                page_text = await el.text_content() or "" if el else ""
+            except Exception:
+                page_text = await page.text_content("body") or ""
+        else:
+            page_text = await page.text_content("body") or ""
+
+        user_message = build_evaluation_prompt(intent, current_url, page_text)
+
+        response_text = ai_client.complete_with_image(
+            system_prompt=EVALUATION_SYSTEM_PROMPT,
+            user_message=user_message,
+            image_base64=img_b64,
+            max_tokens=500,
+        )
+
+        data = AIClient._parse_json_response(response_text)
+
+        passed = data.get("passed", False)
+        confidence = data.get("confidence", 0.0)
+        reasoning = data.get("reasoning", "No reasoning provided")
+
+        # Treat low-confidence passes as failures
+        if passed and confidence < 0.7:
+            return AssertionResult(
+                False,
+                f"AI passed with low confidence ({confidence:.0%}): {reasoning}",
+            )
+
+        return AssertionResult(
+            passed,
+            f"AI verdict ({confidence:.0%} confidence): {reasoning}",
+        )
+
+    except Exception as e:
+        logger.warning("ai_evaluate failed for intent '%s': %s", intent, e)
+        return AssertionResult(False, f"AI evaluation error: {e}")

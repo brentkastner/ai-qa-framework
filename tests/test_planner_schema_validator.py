@@ -338,12 +338,14 @@ class TestValidateTestPlan:
             "element_hidden",
             "text_contains",
             "text_equals",
+            "text_matches",
             "url_matches",
             "screenshot_diff",
             "element_count",
             "network_request_made",
             "no_console_errors",
             "response_status",
+            "ai_evaluate",
         ]
 
         for assertion_type in assertion_types:

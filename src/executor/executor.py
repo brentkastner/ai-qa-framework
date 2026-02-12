@@ -300,7 +300,7 @@ class Executor:
                 result = await check_assertion(
                     page, assertion, evidence_dir, baseline_dir,
                     collector.console_logs, collector.network_log,
-                    self.config,
+                    self.config, self.ai_client,
                 )
                 ar = AssertionResultModel(
                     assertion_type=assertion.assertion_type,

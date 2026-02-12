@@ -423,3 +423,22 @@ def create_mock_screenshot(path: Path) -> None:
 def create_screenshot_helper():
     """Fixture that provides the create_mock_screenshot function."""
     return create_mock_screenshot
+
+
+# ============================================================================
+# AI Client Fixtures
+# ============================================================================
+
+
+@pytest.fixture
+def mock_ai_client() -> Mock:
+    """Create a mock AIClient for ai_evaluate assertions.
+
+    Default behavior: returns a passing verdict with high confidence.
+    Override complete_with_image.return_value in individual tests to customize.
+    """
+    client = Mock()
+    client.complete_with_image = Mock(
+        return_value='{"passed": true, "confidence": 0.95, "reasoning": "Intent satisfied"}'
+    )
+    return client
