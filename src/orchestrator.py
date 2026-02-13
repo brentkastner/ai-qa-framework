@@ -12,6 +12,7 @@ from src.ai.client import AIClient, set_debug_dir
 from src.coverage.gap_analyzer import analyze_gaps
 from src.coverage.registry import CoverageRegistryManager
 from src.coverage.scorer import calculate_coverage_summary
+from src.coverage.visual_baseline_registry import VisualBaselineRegistryManager
 from src.crawler.crawler import Crawler
 from src.executor.executor import Executor
 from src.models.config import FrameworkConfig
@@ -52,6 +53,12 @@ class Orchestrator:
             registry_path=self.framework_dir / "coverage" / "registry.json",
             target_url=config.target_url,
             history_retention=config.history_retention_runs,
+        )
+
+        self.visual_baseline_manager = VisualBaselineRegistryManager(
+            registry_path=self.framework_dir / "visual_baselines" / "registry.json",
+            baselines_dir=self.framework_dir / "visual_baselines",
+            target_url=config.target_url,
         )
 
     def run_full_pipeline(self) -> dict:
@@ -131,8 +138,16 @@ class Orchestrator:
 
     async def _execute(self, plan: TestPlan) -> RunResult:
         baseline_dir = self.framework_dir / "site_model" / "baselines"
-        executor = Executor(self.config, self.ai_client, self.runs_dir)
-        return await executor.execute(plan, baseline_dir if baseline_dir.exists() else None)
+        visual_registry = self.visual_baseline_manager.load()
+        executor = Executor(
+            self.config, self.ai_client, self.runs_dir,
+            visual_registry=visual_registry,
+            visual_registry_manager=self.visual_baseline_manager,
+        )
+        result = await executor.execute(plan, baseline_dir if baseline_dir.exists() else None)
+        # Save any newly captured baselines
+        self.visual_baseline_manager.save(visual_registry)
+        return result
 
     def run_execute_only(self, plan: TestPlan) -> RunResult:
         """Run only the execution stage with a given plan."""
