@@ -18,7 +18,7 @@ class ViewportConfig(BaseModel):
 
 class CrawlConfig(BaseModel):
     target_url: str = ""
-    max_pages: int = 50
+    max_pages: int = 10
     max_depth: int = 5
     include_patterns: list[str] = Field(default_factory=list)
     exclude_patterns: list[str] = Field(default_factory=list)
@@ -66,7 +66,7 @@ class FrameworkConfig(BaseModel):
     )
 
     # Execution limits
-    max_tests_per_run: int = 100
+    max_tests_per_run: int = 20
     max_execution_time_seconds: int = 1800
     max_parallel_contexts: int = 3
 
