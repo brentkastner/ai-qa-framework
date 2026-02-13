@@ -1,5 +1,9 @@
 # AI QA Framework
 
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![CI](https://github.com/brentkastner/ai-qa-framework/actions/workflows/ci.yml/badge.svg)](https://github.com/brentkastner/ai-qa-framework/actions/workflows/ci.yml)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+
 **Give it a URL. Get comprehensive test coverage.**
 
 An autonomous AI-driven QA framework that automatically discovers, tests, and reports on any website—no manual test writing required.
@@ -310,17 +314,21 @@ open qa-reports/report_*.html
 
 ## Contributing
 
-We welcome contributions! Areas of interest:
+We welcome contributions! See the [Contributing Guide](./CONTRIBUTING.md) for how to get started.
+
+Areas of interest:
 - Additional test categories (accessibility, performance)
 - Multi-browser support (Firefox, WebKit)
 - Enhanced authentication (OAuth, SAML)
 - Custom assertion types
 
+Please report security vulnerabilities via the process described in [SECURITY.md](./SECURITY.md).
+
 ---
 
 ## License
 
-[Insert License Information]
+This project is licensed under the Apache License 2.0 — see the [LICENSE](./LICENSE) file for details.
 
 ---
 
