@@ -11,6 +11,7 @@ from pathlib import Path
 from playwright.async_api import async_playwright
 
 from src.ai.client import AIClient
+from src.coverage.visual_baseline_registry import VisualBaselineRegistryManager
 from src.models.config import FrameworkConfig
 from src.models.test_plan import TestCase, TestPlan
 from src.models.test_result import (
@@ -19,6 +20,7 @@ from src.models.test_result import (
     StepResult,
     TestResult,
 )
+from src.models.visual_baseline import VisualBaselineRegistry
 
 from .action_runner import run_action
 from .assertion_checker import check_assertion
@@ -31,13 +33,22 @@ logger = logging.getLogger(__name__)
 class Executor:
     """Executes test plans against a live site using Playwright."""
 
-    def __init__(self, config: FrameworkConfig, ai_client: AIClient | None, runs_dir: Path):
+    def __init__(
+        self,
+        config: FrameworkConfig,
+        ai_client: AIClient | None,
+        runs_dir: Path,
+        visual_registry: VisualBaselineRegistry | None = None,
+        visual_registry_manager: VisualBaselineRegistryManager | None = None,
+    ):
         self.config = config
         self.ai_client = ai_client
         self.runs_dir = runs_dir
         self.run_id = f"run_{uuid.uuid4().hex[:8]}"
         self.run_dir = runs_dir / self.run_id
         self.run_dir.mkdir(parents=True, exist_ok=True)
+        self.visual_registry = visual_registry
+        self.visual_registry_manager = visual_registry_manager
 
     async def execute(self, plan: TestPlan, baseline_dir: Path | None = None) -> RunResult:
         """Execute a full test plan and return results."""
@@ -135,7 +146,7 @@ class Executor:
             await page.close()
 
     async def _run_test(
-        self, context, test_case: TestCase, baseline_dir: Path | None
+        self, context, test_case: TestCase, baseline_dir: Path | None,
     ) -> TestResult:
         """Run a single test case with full step/assertion detail recording."""
         tc = test_case
@@ -160,11 +171,6 @@ class Executor:
         collector.setup_listeners(page)
 
         try:
-            # Initial screenshot
-            s = await collector.take_screenshot(page, "initial")
-            if s:
-                screenshots.append(s)
-
             # === PRECONDITIONS ===
             for i, action in enumerate(tc.preconditions):
                 step_screenshot = None
@@ -192,6 +198,7 @@ class Executor:
                     logger.warning("Precondition %d failed: %s", i, e)
 
             # === TEST STEPS ===
+            is_visual = tc.category == "visual"
             aborted = False
             for step_idx, action in enumerate(tc.steps):
                 if aborted:
@@ -206,9 +213,12 @@ class Executor:
                 step_screenshot = None
                 try:
                     await run_action(page, action, timeout=tc.timeout_seconds * 1000)
-                    step_screenshot = await collector.take_screenshot(page, f"step_{step_idx}")
-                    if step_screenshot:
-                        screenshots.append(step_screenshot)
+                    # Skip step screenshots for visual tests — viewport shots are
+                    # captured by the assertion checker and are more useful.
+                    if not is_visual:
+                        step_screenshot = await collector.take_screenshot(page, f"step_{step_idx}")
+                        if step_screenshot:
+                            screenshots.append(step_screenshot)
                     step_results.append(StepResult(
                         step_index=step_idx, action_type=action.action_type,
                         selector=action.selector, value=action.value,
@@ -301,6 +311,10 @@ class Executor:
                     page, assertion, evidence_dir, baseline_dir,
                     collector.console_logs, collector.network_log,
                     self.config, self.ai_client,
+                    visual_registry=self.visual_registry,
+                    visual_registry_manager=self.visual_registry_manager,
+                    page_id=tc.target_page_id,
+                    run_id=self.run_id,
                 )
                 ar = AssertionResultModel(
                     assertion_type=assertion.assertion_type,
@@ -312,16 +326,21 @@ class Executor:
                 )
                 assertion_results_list.append(ar)
 
+                # Collect viewport screenshots captured by screenshot_diff
+                if result.screenshots:
+                    screenshots.extend(result.screenshots)
+
                 if result.passed:
                     passed_count += 1
                 else:
                     failed_count += 1
                     failure_reasons.append(f"{assertion.description}: {result.message}")
 
-            # Final screenshot
-            s = await collector.take_screenshot(page, "final")
-            if s:
-                screenshots.append(s)
+            # Final screenshot (skip for visual tests — viewport shots already captured)
+            if tc.category != "visual":
+                s = await collector.take_screenshot(page, "final")
+                if s:
+                    screenshots.append(s)
 
             collector.save_logs()
 

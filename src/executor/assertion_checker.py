@@ -11,15 +11,18 @@ from playwright.async_api import Page
 
 from src.ai.client import AIClient
 from src.ai.prompts.evaluation import EVALUATION_SYSTEM_PROMPT, build_evaluation_prompt
+from src.coverage.visual_baseline_registry import VisualBaselineRegistryManager
 from src.models.config import FrameworkConfig
 from src.models.test_plan import Assertion
+from src.models.visual_baseline import VisualBaselineRegistry
 
 logger = logging.getLogger(__name__)
 
 
 class AssertionResult:
-    def __init__(self, passed: bool, message: str = ""):
+    def __init__(self, passed: bool, message: str = "", screenshots: list[str] | None = None):
         self.passed = passed
+        self.screenshots = screenshots or []
         self.message = message
 
 
@@ -32,6 +35,10 @@ async def check_assertion(
     network_log: list[dict] | None = None,
     config: FrameworkConfig | None = None,
     ai_client: AIClient | None = None,
+    visual_registry: VisualBaselineRegistry | None = None,
+    visual_registry_manager: VisualBaselineRegistryManager | None = None,
+    page_id: str = "",
+    run_id: str = "",
 ) -> AssertionResult:
     """Evaluate a single assertion and return the result."""
     logger.debug("Checking assertion: %s", assertion.assertion_type)
@@ -50,7 +57,11 @@ async def check_assertion(
             case "url_matches":
                 return _check_url_matches(page, assertion)
             case "screenshot_diff":
-                return await _check_screenshot_diff(page, assertion, evidence_dir, baseline_dir, config)
+                return await _check_screenshot_diff(
+                    page, assertion, evidence_dir, config,
+                    visual_registry, visual_registry_manager,
+                    page_id, run_id,
+                )
             case "element_count":
                 return await _check_element_count(page, assertion)
             case "network_request_made":
@@ -154,61 +165,108 @@ def _check_url_matches(page: Page, assertion: Assertion) -> AssertionResult:
 
 
 async def _check_screenshot_diff(
-    page: Page, assertion: Assertion, evidence_dir: Path, baseline_dir: Path | None, config: FrameworkConfig | None = None
+    page: Page,
+    assertion: Assertion,
+    evidence_dir: Path,
+    config: FrameworkConfig | None = None,
+    visual_registry: VisualBaselineRegistry | None = None,
+    visual_registry_manager: VisualBaselineRegistryManager | None = None,
+    page_id: str = "",
+    run_id: str = "",
 ) -> AssertionResult:
-    # Use assertion-specific tolerance, then config default, then fall back to 0.05
+    """Compare screenshots across all configured viewports in a single assertion."""
     default_tolerance = config.visual_diff_tolerance if config else 0.05
     tolerance = assertion.tolerance if assertion.tolerance is not None else default_tolerance
-    current_path = evidence_dir / "screenshot_current.png"
-
-    # Wait for page to stabilize before taking screenshot
-    # This helps avoid failures due to animations, font loading, layout shifts
-    try:
-        await page.wait_for_load_state("networkidle", timeout=3000)
-    except Exception:
-        # If network doesn't idle within 3s, continue anyway
-        pass
-
-    # Additional wait for fonts and animations to settle
-    await page.wait_for_timeout(500)
-
-    # Use viewport screenshot by default (less sensitive to dynamic content like scrollbars)
-    # Set full_page=True in assertion if you need full page comparison
     full_page = assertion.expected_value == "full_page" if assertion.expected_value else False
-    await page.screenshot(path=str(current_path), full_page=full_page)
 
-    if not baseline_dir:
-        return AssertionResult(True, "No baseline to compare (first run)")
+    if not visual_registry or not visual_registry_manager:
+        return AssertionResult(True, "No visual baseline registry configured (first run)")
 
-    # Find baseline
-    baseline_candidates = list(baseline_dir.glob("*_screenshot.png"))
-    if not baseline_candidates:
-        return AssertionResult(True, "No baseline screenshot found (first run)")
+    if not page_id:
+        return AssertionResult(True, "No page_id provided — skipping baseline comparison")
 
-    baseline_path = baseline_candidates[0]
+    viewports = config.viewports if config else []
+    if not viewports:
+        viewports = [type("V", (), {"name": "desktop", "width": 1280, "height": 720})()]
+
+    original_viewport = page.viewport_size
+    all_passed = True
+    messages: list[str] = []
+    captured_screenshots: list[str] = []
+
+    for vp in viewports:
+        # Resize to this viewport
+        await page.set_viewport_size({"width": vp.width, "height": vp.height})
+
+        # Wait for layout to stabilize after resize
+        try:
+            await page.wait_for_load_state("networkidle", timeout=3000)
+        except Exception:
+            pass
+        await page.wait_for_timeout(500)
+
+        # Capture screenshot for this viewport
+        current_path = evidence_dir / f"screenshot_{vp.name}.png"
+        await page.screenshot(path=str(current_path), full_page=full_page)
+        captured_screenshots.append(str(current_path))
+
+        # Look up existing baseline
+        entry = visual_registry_manager.get_baseline(visual_registry, page_id, vp.name)
+
+        if entry is None:
+            # First run: store as baseline
+            visual_registry_manager.store_baseline(
+                registry=visual_registry,
+                page_id=page_id,
+                viewport_name=vp.name,
+                viewport_width=vp.width,
+                viewport_height=vp.height,
+                source_image_path=current_path,
+                run_id=run_id,
+            )
+            messages.append(f"{vp.name} ({vp.width}x{vp.height}): baseline captured")
+            continue
+
+        # Compare against stored baseline
+        vp_passed, vp_msg = _compare_images(
+            visual_registry_manager.get_baseline_image_path(entry),
+            current_path, tolerance, page_id, vp.name,
+        )
+        if not vp_passed:
+            all_passed = False
+        messages.append(vp_msg)
+
+    # Restore original viewport
+    if original_viewport:
+        await page.set_viewport_size(original_viewport)
+
+    return AssertionResult(all_passed, "; ".join(messages), screenshots=captured_screenshots)
+
+
+def _compare_images(
+    baseline_path: Path, current_path: Path,
+    tolerance: float, page_id: str, viewport_name: str,
+) -> tuple[bool, str]:
+    """Pixel-compare two images and return (passed, message)."""
     try:
         from PIL import Image
-        baseline = Image.open(baseline_path)
-        current = Image.open(current_path)
 
-        # Resize to same dimensions
-        if baseline.size != current.size:
-            current = current.resize(baseline.size)
+        baseline_img = Image.open(baseline_path)
+        current_img = Image.open(current_path)
 
-        # Pixel comparison with tolerance for anti-aliasing and rendering differences
-        baseline_pixels = list(baseline.getdata())
-        current_pixels = list(current.getdata())
+        if baseline_img.size != current_img.size:
+            current_img = current_img.resize(baseline_img.size)
+
+        baseline_pixels = list(baseline_img.getdata())
+        current_pixels = list(current_img.getdata())
         total = len(baseline_pixels)
         if total == 0:
-            return AssertionResult(True, "Empty images")
+            return True, f"{viewport_name}: empty images"
 
         diff_count = 0
-        # Use threshold of 40 to be more forgiving of anti-aliasing, font rendering,
-        # and minor browser differences (was 10, which was too strict)
         pixel_threshold = 40
         for bp, cp in zip(baseline_pixels, current_pixels):
             if isinstance(bp, tuple) and isinstance(cp, tuple):
-                # Check if any RGB channel differs by more than threshold
                 if any(abs(a - b) > pixel_threshold for a, b in zip(bp, cp)):
                     diff_count += 1
             elif bp != cp:
@@ -216,10 +274,9 @@ async def _check_screenshot_diff(
 
         diff_ratio = diff_count / total
         passed = diff_ratio <= tolerance
-        msg = f"Pixel diff: {diff_ratio:.2%} (tolerance: {tolerance:.2%})"
-        return AssertionResult(passed, msg)
+        return passed, f"{viewport_name}: {diff_ratio:.2%} diff (tolerance: {tolerance:.2%})"
     except Exception as e:
-        return AssertionResult(False, f"Screenshot comparison error: {e}")
+        return False, f"{viewport_name}: comparison error: {e}"
 
 
 async def _check_element_count(page: Page, assertion: Assertion) -> AssertionResult:
