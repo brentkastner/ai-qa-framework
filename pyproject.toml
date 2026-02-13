@@ -7,7 +7,20 @@ name = "ai-qa-framework"
 version = "1.0.0"
 description = "Autonomous AI-Driven Website QA Framework"
 readme = "README.md"
+license = "Apache-2.0"
 requires-python = ">=3.12"
+authors = [
+    { name = "Brent Kastner" },
+]
+keywords = ["qa", "testing", "ai", "automation", "playwright", "anthropic"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Testing",
+]
 dependencies = [
     "playwright>=1.40.0",
     "anthropic>=0.39.0",
@@ -27,6 +40,11 @@ dev = [
 
 [project.scripts]
 qa-framework = "src.cli:cli"
+
+[project.urls]
+Homepage = "https://github.com/brentkastner/ai-qa-framework"
+Repository = "https://github.com/brentkastner/ai-qa-framework"
+Issues = "https://github.com/brentkastner/ai-qa-framework/issues"
 
 [tool.setuptools.packages.find]
 include = ["src*"]

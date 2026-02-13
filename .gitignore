@@ -16,3 +16,13 @@ __pycache__/
 
 # Test cache
 .pytest_cache
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+.venv/
+venv/
