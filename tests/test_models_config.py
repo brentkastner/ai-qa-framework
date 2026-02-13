@@ -46,7 +46,7 @@ class TestCrawlConfig:
         """Test CrawlConfig has correct default values."""
         config = CrawlConfig()
         assert config.target_url == ""
-        assert config.max_pages == 50
+        assert config.max_pages == 10
         assert config.max_depth == 5
         assert config.include_patterns == []
         assert config.exclude_patterns == []
@@ -148,7 +148,7 @@ class TestFrameworkConfig:
         """Test FrameworkConfig has correct default values."""
         config = FrameworkConfig(target_url="https://example.com")
         assert config.categories == ["functional", "visual", "security"]
-        assert config.max_tests_per_run == 100
+        assert config.max_tests_per_run == 20
         assert config.max_execution_time_seconds == 1800
         assert config.max_parallel_contexts == 3
         assert config.ai_model == "claude-opus-4-6"
