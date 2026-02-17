@@ -15,9 +15,9 @@ from urllib.parse import urljoin, urlparse
 from playwright.async_api import BrowserContext, Page, async_playwright
 
 from src.models.config import FrameworkConfig
+from src.auth.smart_auth import perform_smart_auth
 from src.models.site_model import (
     APIEndpoint,
-    AuthFlow,
     NetworkRequest,
     PageModel,
     SiteModel,
@@ -113,12 +113,13 @@ class Crawler:
     - sitemap.xml (low-priority backfill)
     """
 
-    def __init__(self, config: FrameworkConfig, output_dir: Path):
+    def __init__(self, config: FrameworkConfig, output_dir: Path, ai_client=None):
         self.config = config
         self.crawl_config = config.crawl
         self.output_dir = output_dir
         self.baselines_dir = output_dir / "baselines"
         self.baselines_dir.mkdir(parents=True, exist_ok=True)
+        self._ai_client = ai_client
 
         self._visited_urls: set[str] = set()
         self._queued_urls: set[str] = set()
@@ -145,9 +146,23 @@ class Crawler:
 
             auth_flow = None
             if self.config.auth:
-                auth_flow = await self._authenticate(context)
+                result = await perform_smart_auth(
+                    context, self.config.auth, ai_client=self._ai_client,
+                )
+                if result.success:
+                    auth_flow = result.auth_flow
+                else:
+                    logger.error("Authentication failed: %s", result.error)
 
             await self._priority_crawl(context, target)
+
+            # Probe auth requirements for each discovered page
+            if self.config.auth and auth_flow:
+                await self._probe_auth_requirements(browser)
+            else:
+                for page_model in self._pages:
+                    page_model.auth_required = False
+
             await browser.close()
 
         duration = time.time() - start_time
@@ -170,31 +185,59 @@ class Crawler:
             },
         )
 
-    async def _authenticate(self, context: BrowserContext) -> Optional[AuthFlow]:
-        auth = self.config.auth
-        if not auth:
-            return None
-        logger.info("Authenticating at %s", auth.login_url)
-        page = await context.new_page()
-        try:
-            await page.goto(auth.login_url, wait_until="networkidle", timeout=30000)
-            await page.fill(auth.username_selector, auth.username)
-            await page.fill(auth.password_selector, auth.password)
-            await page.click(auth.submit_selector)
-            if auth.success_indicator:
-                try:
-                    await page.wait_for_selector(auth.success_indicator, timeout=10000)
-                except Exception:
-                    await page.wait_for_load_state("networkidle", timeout=10000)
-            else:
-                await page.wait_for_load_state("networkidle", timeout=10000)
-            logger.info("Authentication successful")
-            return AuthFlow(login_url=auth.login_url, login_method="form", requires_credentials=True)
-        except Exception as e:
-            logger.error("Authentication failed: %s", e)
-            return None
-        finally:
-            await page.close()
+    async def _probe_auth_requirements(self, browser) -> None:
+        """Probe each discovered page in a clean context to determine if auth is required."""
+        if not self._pages:
+            return
+        logger.info("Probing %d pages for auth requirements", len(self._pages))
+        clean_context = await browser.new_context(
+            viewport={
+                "width": self.crawl_config.viewport.width,
+                "height": self.crawl_config.viewport.height,
+            },
+            user_agent=self.crawl_config.user_agent,
+        )
+        probe_page = await clean_context.new_page()
+
+        login_path = ""
+        if self.config.auth and self.config.auth.login_url:
+            login_path = urlparse(self.config.auth.login_url).path.rstrip("/")
+
+        for page_model in self._pages:
+            try:
+                resp = await probe_page.goto(
+                    page_model.url, wait_until="domcontentloaded", timeout=10000,
+                )
+                if resp is None:
+                    page_model.auth_required = True
+                    continue
+
+                status = resp.status
+                final_url = probe_page.url
+
+                # HTTP 401/403 → requires auth
+                if status in (401, 403):
+                    page_model.auth_required = True
+                # Redirected to login URL
+                elif login_path and login_path in urlparse(final_url).path:
+                    page_model.auth_required = True
+                else:
+                    # Check if landing page looks like a login form
+                    title = (await probe_page.title() or "").lower()
+                    if any(kw in title for kw in ("login", "sign in", "log in", "authenticate")):
+                        page_model.auth_required = True
+                    else:
+                        page_model.auth_required = False
+
+            except Exception as e:
+                logger.debug("Auth probe failed for %s: %s", page_model.url, e)
+                page_model.auth_required = None
+
+        await probe_page.close()
+        await clean_context.close()
+        auth_count = sum(1 for p in self._pages if p.auth_required is True)
+        public_count = sum(1 for p in self._pages if p.auth_required is False)
+        logger.info("Auth probe: %d require auth, %d public", auth_count, public_count)
 
     # ------------------------------------------------------------------
     # Core crawl loop

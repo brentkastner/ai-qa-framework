@@ -95,16 +95,18 @@ class TestAuthConfig:
         assert config.username == "test@example.com"
         assert config.password == "secret123"
 
-    def test_default_selectors(self):
-        """Test AuthConfig has sensible default selectors."""
+    def test_default_selectors_empty_for_auto_detect(self):
+        """Test AuthConfig defaults to empty selectors (triggers auto-detection)."""
         config = AuthConfig(
             login_url="https://example.com/login",
             username="user",
             password="pass",
         )
-        assert "username" in config.username_selector
-        assert "password" in config.password_selector
-        assert "submit" in config.submit_selector
+        assert config.username_selector == ""
+        assert config.password_selector == ""
+        assert config.submit_selector == ""
+        assert config.auto_detect is True
+        assert config.llm_fallback is True
 
     def test_env_password_resolution(self):
         """Test password can be resolved from environment variable."""

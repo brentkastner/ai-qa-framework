@@ -11,6 +11,7 @@ from pathlib import Path
 from playwright.async_api import async_playwright
 
 from src.ai.client import AIClient
+from src.auth.smart_auth import perform_smart_auth
 from src.coverage.visual_baseline_registry import VisualBaselineRegistryManager
 from src.models.config import FrameworkConfig
 from src.models.test_plan import TestCase, TestPlan
@@ -132,18 +133,12 @@ class Executor:
         auth = self.config.auth
         if not auth:
             return
-        page = await context.new_page()
-        try:
-            await page.goto(auth.login_url, wait_until="networkidle", timeout=30000)
-            await page.fill(auth.username_selector, auth.username)
-            await page.fill(auth.password_selector, auth.password)
-            await page.click(auth.submit_selector)
-            await page.wait_for_load_state("networkidle", timeout=10000)
-            logger.info("Executor auth successful")
-        except Exception as e:
-            logger.error("Executor auth failed: %s", e)
-        finally:
-            await page.close()
+        result = await perform_smart_auth(context, auth, ai_client=self.ai_client)
+        if result.success:
+            method = result.auth_flow.detection_method if result.auth_flow else "unknown"
+            logger.info("Executor auth successful (method=%s)", method)
+        else:
+            logger.error("Executor auth failed: %s", result.error)
 
     async def _run_test(
         self, context, test_case: TestCase, baseline_dir: Path | None,

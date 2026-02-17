@@ -61,7 +61,7 @@ def crawl_config(viewport_config: ViewportConfig) -> CrawlConfig:
 
 @pytest.fixture
 def auth_config() -> AuthConfig:
-    """Create a test authentication configuration."""
+    """Create a test authentication configuration with explicit selectors."""
     return AuthConfig(
         login_url="https://example.com/login",
         username="test@example.com",
@@ -70,6 +70,16 @@ def auth_config() -> AuthConfig:
         password_selector="input[name='password']",
         submit_selector="button[type='submit']",
         success_indicator=".dashboard",
+    )
+
+
+@pytest.fixture
+def auth_config_auto_detect() -> AuthConfig:
+    """Create a test auth config that relies on auto-detection (no selectors)."""
+    return AuthConfig(
+        login_url="https://example.com/login",
+        username="test@example.com",
+        password="testpass123",
     )
 
 

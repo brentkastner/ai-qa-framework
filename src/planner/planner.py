@@ -103,6 +103,7 @@ class Planner:
                 "url": page.url,
                 "page_type": page.page_type,
                 "title": page.title,
+                "auth_required": page.auth_required,
                 "interactive_elements_count": sum(1 for e in page.elements if e.is_interactive),
                 "forms": [
                     {

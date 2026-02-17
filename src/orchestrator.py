@@ -115,7 +115,7 @@ class Orchestrator:
 
     async def _crawl(self) -> SiteModel:
         site_model_dir = self.framework_dir / "site_model"
-        crawler = Crawler(self.config, site_model_dir)
+        crawler = Crawler(self.config, site_model_dir, ai_client=self.ai_client)
         return await crawler.crawl()
 
     def run_crawl_only(self) -> SiteModel:

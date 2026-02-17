@@ -55,6 +55,8 @@ class AuthFlow(BaseModel):
     login_url: str
     login_method: str = "form"  # form, oauth, etc.
     requires_credentials: bool = True
+    detection_method: str = ""  # "explicit", "auto_detect", or "llm_fallback"
+    detected_selectors: dict[str, str] = Field(default_factory=dict)
 
 
 class PageModel(BaseModel):
@@ -67,6 +69,7 @@ class PageModel(BaseModel):
     network_requests: list[NetworkRequest] = Field(default_factory=list)
     screenshot_path: str = ""
     dom_snapshot_path: str = ""
+    auth_required: Optional[bool] = None  # None = unknown, True = needs auth, False = public
 
 
 class SiteModel(BaseModel):
