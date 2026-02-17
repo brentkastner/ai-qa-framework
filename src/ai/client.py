@@ -65,12 +65,15 @@ class AIClient:
         """Send a completion request to Claude and return the text response."""
         self._call_count += 1
         tokens = max_tokens or self.max_tokens
-        logger.debug(
-            "AI API call #%d (model=%s, max_tokens=%d)",
+        logger.info(
+            "Calling AI (call #%d, model=%s, max_tokens=%d)...",
             self._call_count, self.model, tokens,
         )
+        logger.debug("AI prompt length: system=%d chars, user=%d chars",
+                      len(system_prompt), len(user_message))
 
         try:
+            call_start = time.time()
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=tokens,
@@ -78,8 +81,10 @@ class AIClient:
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_message}],
             )
+            call_duration = time.time() - call_start
             text = response.content[0].text
-            logger.debug("AI response length: %d chars", len(text))
+            logger.info("AI response received in %.1fs (%d chars)",
+                        call_duration, len(text))
 
             # Detect if response was truncated due to token limit
             if response.stop_reason == "max_tokens":
@@ -131,8 +136,14 @@ class AIClient:
     ) -> str:
         """Send a completion request with an image (for fallback analysis)."""
         self._call_count += 1
+        tokens = max_tokens or self.max_tokens
+        logger.info(
+            "Calling AI with image (call #%d, model=%s, max_tokens=%d)...",
+            self._call_count, self.model, tokens,
+        )
 
         try:
+            call_start = time.time()
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=max_tokens or self.max_tokens,
@@ -154,7 +165,10 @@ class AIClient:
                     }
                 ],
             )
+            call_duration = time.time() - call_start
             text = response.content[0].text
+            logger.info("AI image response received in %.1fs (%d chars)",
+                        call_duration, len(text))
             self._save_exchange_log(
                 call_number=self._call_count,
                 system_prompt=system_prompt,

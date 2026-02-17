@@ -55,8 +55,9 @@ class Executor:
         """Execute a full test plan and return results."""
         started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ")
         start_time = time.time()
+        total_tests = len(plan.test_cases)
         logger.info("Starting execution of plan %s (%d tests)",
-                     plan.plan_id, len(plan.test_cases))
+                     plan.plan_id, total_tests)
 
         sorted_tests = sorted(plan.test_cases, key=lambda tc: tc.priority)
 
@@ -64,19 +65,24 @@ class Executor:
         for tc in sorted_tests:
             key = tc.target_page_id or "ungrouped"
             page_groups.setdefault(key, []).append(tc)
+        logger.debug("Tests grouped into %d page groups", len(page_groups))
 
         test_results: list[TestResult] = []
         remaining_time = self.config.max_execution_time_seconds
+        test_counter = 0
 
         async with async_playwright() as p:
+            logger.debug("Launching headless Chromium for test execution...")
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context(viewport={"width": 1280, "height": 720})
 
             if self.config.auth:
+                logger.info("Authenticating before test execution...")
                 await self._authenticate(context)
 
             for group_key, tests in page_groups.items():
                 if remaining_time <= 0:
+                    logger.warning("Time limit reached, skipping remaining tests")
                     for tc in tests:
                         test_results.append(TestResult(
                             test_id=tc.test_id, test_name=tc.name,
@@ -90,6 +96,7 @@ class Executor:
                     elapsed = time.time() - start_time
                     remaining_time = self.config.max_execution_time_seconds - elapsed
                     if remaining_time <= 0:
+                        logger.warning("Time limit reached, skipping %s", tc.name)
                         test_results.append(TestResult(
                             test_id=tc.test_id, test_name=tc.name,
                             description=tc.description, category=tc.category,
@@ -98,9 +105,16 @@ class Executor:
                         ))
                         continue
 
+                    test_counter += 1
+                    logger.info("Running test [%d/%d]: %s (%s)",
+                                test_counter, total_tests, tc.name, tc.category)
+                    logger.debug("  Test ID: %s | Page: %s | Timeout: %ds",
+                                 tc.test_id, tc.target_page_id, tc.timeout_seconds)
                     result = await self._run_test(context, tc, baseline_dir)
                     test_results.append(result)
-                    logger.info("[%s] %s: %s", result.result.upper(), tc.test_id, tc.name)
+                    logger.info("[%s] %s: %s (%.1fs)",
+                                result.result.upper(), tc.test_id, tc.name,
+                                result.duration_seconds or 0)
 
             await browser.close()
 
@@ -167,7 +181,12 @@ class Executor:
 
         try:
             # === PRECONDITIONS ===
+            if tc.preconditions:
+                logger.debug("  Running %d preconditions...", len(tc.preconditions))
             for i, action in enumerate(tc.preconditions):
+                logger.debug("  Precondition %d/%d: %s %s",
+                             i + 1, len(tc.preconditions), action.action_type,
+                             action.description or action.selector or "")
                 step_screenshot = None
                 try:
                     await run_action(page, action, timeout=tc.timeout_seconds * 1000)
@@ -193,6 +212,7 @@ class Executor:
                     logger.warning("Precondition %d failed: %s", i, e)
 
             # === TEST STEPS ===
+            logger.debug("  Running %d test steps...", len(tc.steps))
             is_visual = tc.category == "visual"
             aborted = False
             for step_idx, action in enumerate(tc.steps):
@@ -205,6 +225,9 @@ class Executor:
                     ))
                     continue
 
+                logger.debug("  Step %d/%d: %s %s",
+                             step_idx + 1, len(tc.steps), action.action_type,
+                             action.description or action.selector or "")
                 step_screenshot = None
                 try:
                     await run_action(page, action, timeout=tc.timeout_seconds * 1000)
@@ -228,6 +251,8 @@ class Executor:
                     # Try AI fallback
                     recovered = False
                     if fallback_handler and fallback_handler.budget_remaining > 0:
+                        logger.debug("  Step %d failed, attempting AI fallback (%d attempts remaining)...",
+                                     step_idx + 1, fallback_handler.budget_remaining)
                         dom = ""
                         try:
                             dom = await page.content()
@@ -297,11 +322,16 @@ class Executor:
                         ))
 
             # === ASSERTIONS ===
+            logger.debug("  Checking %d assertions...", len(tc.assertions))
             passed_count = 0
             failed_count = 0
             failure_reasons = []
 
-            for assertion in tc.assertions:
+            for a_idx, assertion in enumerate(tc.assertions):
+                logger.debug("  Assertion %d/%d: %s — %s",
+                             a_idx + 1, len(tc.assertions),
+                             assertion.assertion_type,
+                             assertion.description or assertion.selector or "")
                 result = await check_assertion(
                     page, assertion, evidence_dir, baseline_dir,
                     collector.console_logs, collector.network_log,
@@ -327,9 +357,13 @@ class Executor:
 
                 if result.passed:
                     passed_count += 1
+                    logger.debug("  Assertion %d/%d: PASSED — %s",
+                                 a_idx + 1, len(tc.assertions), result.message)
                 else:
                     failed_count += 1
                     failure_reasons.append(f"{assertion.description}: {result.message}")
+                    logger.debug("  Assertion %d/%d: FAILED — %s",
+                                 a_idx + 1, len(tc.assertions), result.message)
 
             # Final screenshot (skip for visual tests — viewport shots already captured)
             if tc.category != "visual":

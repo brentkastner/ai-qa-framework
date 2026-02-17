@@ -38,24 +38,30 @@ class Reporter:
         out_dir = output_dir or Path(self.config.report_output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         generated = {}
+        logger.debug("Report output directory: %s", out_dir)
 
         # Generate AI summary
         if self.ai_client and not run_result.ai_summary:
+            logger.debug("Generating AI-powered test summary...")
             run_result.ai_summary = self._generate_summary(run_result, registry)
 
         # Detect regressions if we have a previous run
         regressions = []
         if previous_run:
+            logger.debug("Detecting regressions against previous run...")
             regressions = detect_regressions(previous_run, run_result)
+            logger.debug("Found %d regressions", len(regressions))
 
         if "html" in self.config.report_formats:
             path = out_dir / f"report_{run_result.run_id}.html"
+            logger.debug("Generating HTML report...")
             generate_html_report(run_result, regressions, registry, path)
             generated["html"] = str(path)
             logger.info("HTML report: %s", path)
 
         if "json" in self.config.report_formats:
             path = out_dir / f"report_{run_result.run_id}.json"
+            logger.debug("Generating JSON report...")
             generate_json_report(run_result, regressions, path)
             generated["json"] = str(path)
             logger.info("JSON report: %s", path)

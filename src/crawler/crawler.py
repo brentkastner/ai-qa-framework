@@ -135,7 +135,10 @@ class Crawler:
         logger.info("Starting crawl of %s", target)
 
         async with async_playwright() as p:
+            logger.debug("Launching headless Chromium browser...")
             browser = await p.chromium.launch(headless=True)
+            logger.debug("Creating browser context (viewport=%dx%d)",
+                         self.crawl_config.viewport.width, self.crawl_config.viewport.height)
             context = await browser.new_context(
                 viewport={
                     "width": self.crawl_config.viewport.width,
@@ -146,11 +149,13 @@ class Crawler:
 
             auth_flow = None
             if self.config.auth:
+                logger.info("Authenticating before crawl...")
                 result = await perform_smart_auth(
                     context, self.config.auth, ai_client=self._ai_client,
                 )
                 if result.success:
                     auth_flow = result.auth_flow
+                    logger.info("Authentication successful")
                 else:
                     logger.error("Authentication failed: %s", result.error)
 
@@ -203,7 +208,8 @@ class Crawler:
         if self.config.auth and self.config.auth.login_url:
             login_path = urlparse(self.config.auth.login_url).path.rstrip("/")
 
-        for page_model in self._pages:
+        for idx, page_model in enumerate(self._pages):
+            logger.debug("Auth probing [%d/%d]: %s", idx + 1, len(self._pages), page_model.url)
             try:
                 resp = await probe_page.goto(
                     page_model.url, wait_until="domcontentloaded", timeout=10000,
@@ -294,10 +300,15 @@ class Crawler:
                         logger.info("SPA detected (routing: %s)", spa_type)
 
                 # Process page content
+                logger.debug("Extracting page content: elements, forms, screenshots...")
                 page_model = await self._process_page(page, url, network_requests)
                 self._pages.append(page_model)
+                logger.debug("Page processed: %d elements, %d forms, %d network requests",
+                             len(page_model.elements), len(page_model.forms),
+                             len(page_model.network_requests))
 
                 # === LINK DISCOVERY ===
+                logger.debug("Discovering links on page...")
                 discovered = await self._discover_all_links(page, url)
 
                 # Build nav graph and queue discovered links at ORGANIC priority
@@ -381,13 +392,21 @@ class Crawler:
         except Exception:
             pass
 
+        logger.debug("Classifying page type...")
         page_type = await self._classify_page(page)
+        logger.debug("Page type: %s", page_type)
+        logger.debug("Extracting interactive elements...")
         elements = await extract_elements(page)
+        logger.debug("Found %d elements (%d interactive)",
+                     len(elements), sum(1 for e in elements if e.is_interactive))
+        logger.debug("Analyzing forms...")
         forms = await analyze_forms(page)
+        logger.debug("Found %d forms", len(forms))
 
         pid = _page_id(url)
         screenshot_path = ""
         try:
+            logger.debug("Capturing screenshot for %s...", url)
             screenshot_path = str(self.baselines_dir / f"{pid}_screenshot.png")
             await page.screenshot(path=screenshot_path, full_page=True)
         except Exception as e:
@@ -396,6 +415,7 @@ class Crawler:
 
         dom_path = ""
         try:
+            logger.debug("Capturing DOM snapshot for %s...", url)
             dom_path = str(self.baselines_dir / f"{pid}_dom.html")
             dom_content = await page.content()
             with open(dom_path, "w", encoding="utf-8") as f:
@@ -425,24 +445,32 @@ class Crawler:
         discovered = set()
 
         # 1. Static DOM links (<a>, <area>, <frame>, <iframe>)
+        logger.debug("  Link discovery: extracting static links...")
         static = await self._extract_static_links(page, base_url)
         discovered.update(static)
+        logger.debug("  Link discovery: %d static links found", len(static))
 
         # 2. SPA route links
         if self._is_spa:
             try:
+                logger.debug("  Link discovery: discovering SPA routes...")
                 spa = await discover_spa_routes(page, base_url)
                 discovered.update(spa)
+                logger.debug("  Link discovery: %d SPA routes found", len(spa))
             except Exception as e:
                 logger.debug("SPA route discovery error: %s", e)
 
         # 3. Dynamic links (onclick, data attributes, meta refresh)
+        logger.debug("  Link discovery: extracting dynamic links...")
         dynamic = await self._extract_dynamic_links(page, base_url)
         discovered.update(dynamic)
+        logger.debug("  Link discovery: %d dynamic links found", len(dynamic))
 
         # 4. Interactive links (click menus/dropdowns to reveal hidden nav)
+        logger.debug("  Link discovery: clicking nav menus/dropdowns...")
         interactive = await self._discover_interactive_links(page, base_url)
         discovered.update(interactive)
+        logger.debug("  Link discovery: %d interactive links found", len(interactive))
 
         logger.debug(
             "Link discovery for %s: %d static, %d dynamic, %d interactive, %d total unique",
@@ -671,14 +699,17 @@ class Crawler:
         """Navigate to a URL with retry on failure."""
         for attempt in range(retries + 1):
             try:
+                logger.debug("Navigating to %s (attempt %d/%d)...", url, attempt + 1, retries + 1)
                 resp = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
                 if resp and resp.status >= 400 and resp.status != 404:
                     logger.warning("HTTP %d for %s", resp.status, url)
 
                 if self.crawl_config.wait_for_idle:
+                    logger.debug("Waiting for network idle...")
                     try:
                         await page.wait_for_load_state("networkidle", timeout=10000)
                     except Exception:
+                        logger.debug("Network idle timeout, continuing after 2s fallback wait")
                         await page.wait_for_timeout(2000)
 
                 return True

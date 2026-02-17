@@ -58,7 +58,9 @@ class FallbackHandler:
             return FallbackResponse(decision="abort", reasoning="Fallback budget exhausted")
 
         self._call_count += 1
-        logger.info("AI fallback call %d/%d", self._call_count, self.max_calls)
+        logger.info("AI fallback call %d/%d for failed step", self._call_count, self.max_calls)
+        logger.debug("Fallback context: %s", test_context)
+        logger.debug("Fallback original selector: %s", original_action.selector)
 
         user_message = build_fallback_prompt(
             test_context=test_context,
@@ -90,15 +92,21 @@ class FallbackHandler:
                     max_tokens=1000,
                 )
 
+            decision = data.get("decision", "skip")
+            reasoning = data.get("reasoning", "")
+            logger.debug("Fallback AI decision: %s — %s", decision, reasoning)
+
             new_action = None
             if data.get("new_action"):
                 new_action = Action(**data["new_action"])
+                logger.debug("Fallback new action: %s selector=%s",
+                             new_action.action_type, new_action.selector)
 
             return FallbackResponse(
-                decision=data.get("decision", "skip"),
+                decision=decision,
                 new_selector=data.get("new_selector"),
                 new_action=new_action,
-                reasoning=data.get("reasoning", ""),
+                reasoning=reasoning,
             )
 
         except ValueError as e:

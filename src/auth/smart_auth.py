@@ -50,14 +50,18 @@ async def perform_smart_auth(
     try:
         await page.goto(auth_config.login_url, wait_until="networkidle", timeout=30000)
 
+        logger.debug("Smart auth: resolving login form selectors...")
         selectors = await _resolve_selectors(page, auth_config, ai_client)
         if selectors is None:
+            logger.debug("Smart auth: no login form selectors found")
             return SmartAuthResult(
                 success=False,
                 error="Could not identify login form fields",
             )
 
         username_sel, password_sel, submit_sel, method = selectors
+        logger.debug("Smart auth: selectors resolved — username=%s, password=%s, submit=%s",
+                      username_sel, password_sel, submit_sel)
 
         # Fill and submit
         logger.info("Smart auth: filling form (method=%s)", method)
@@ -107,6 +111,7 @@ async def _resolve_selectors(
     Returns (username_sel, password_sel, submit_sel, detection_method) or None.
     """
     # Tier 1: Explicit selectors
+    logger.debug("Smart auth: checking Tier 1 — explicit selectors")
     if (
         not auth_config.auto_detect
         or (auth_config.username_selector and auth_config.password_selector and auth_config.submit_selector)
@@ -121,17 +126,21 @@ async def _resolve_selectors(
 
     # Tier 2: Auto-detect via form analysis + heuristics
     if auth_config.auto_detect:
+        logger.debug("Smart auth: trying Tier 2 — auto-detect via form analysis")
         result = await _auto_detect_login_form(page)
         if result is not None:
             logger.info("Smart auth: auto-detected login form")
             return (*result, "auto_detect")
+        logger.debug("Smart auth: Tier 2 auto-detect did not find login form")
 
     # Tier 3: LLM vision fallback
     if auth_config.llm_fallback and ai_client is not None:
+        logger.debug("Smart auth: trying Tier 3 — LLM vision fallback")
         result = await _llm_detect_login_form(page, auth_config, ai_client)
         if result is not None:
             logger.info("Smart auth: LLM identified login form")
             return (*result, "llm_fallback")
+        logger.debug("Smart auth: Tier 3 LLM fallback did not identify form")
 
     # All tiers failed — try explicit selectors as last resort if any were provided
     if auth_config.username_selector or auth_config.password_selector:
@@ -390,8 +399,10 @@ async def _llm_detect_login_form(
 
 async def _verify_login_success(page: Page, auth_config: AuthConfig) -> bool:
     """Verify that login was successful after form submission."""
+    logger.debug("Smart auth: verifying login success...")
     # Wait for navigation / network activity
     if auth_config.success_indicator:
+        logger.debug("Smart auth: checking success indicator: %s", auth_config.success_indicator)
         try:
             await page.wait_for_selector(auth_config.success_indicator, timeout=10000)
             return True
@@ -406,6 +417,8 @@ async def _verify_login_success(page: Page, auth_config: AuthConfig) -> bool:
 
     # Check 1: URL changed away from login page
     current_url = page.url
+    logger.debug("Smart auth: checking URL change — current=%s, login=%s",
+                  current_url, auth_config.login_url)
     if current_url != auth_config.login_url:
         login_path = auth_config.login_url.rstrip("/")
         current_path = current_url.rstrip("/")
