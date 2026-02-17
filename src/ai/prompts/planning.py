@@ -68,6 +68,7 @@ REQUIRED RESPONSE FORMAT (plain JSON, no markdown fences):
    - Use text_matches with regex patterns for flexible text matching (e.g., "Welcome.*|Dashboard|My Account" to match various post-login states).
    - Use ai_evaluate when the expected outcome is ambiguous and best described as an intent (e.g., "user appears to be logged in", "form submission was accepted", "search results are displayed"). Set expected_value to a clear natural language intent description. The AI will judge the actual page state at runtime.
    - NEVER guess what text a site will display after an action. If you cannot determine the exact text from the site model, use element_visible, url_matches, or ai_evaluate instead.
+9. **Auth-aware tests:** Pages in the site model may have an `auth_required` field. Pages with `auth_required: true` need authentication before testing. The test execution framework handles authentication automatically via a shared browser session, so you do NOT need to add login steps as preconditions. However, be aware that `auth_required: false` pages are publicly accessible and could be tested without authentication. Use this information to design appropriate test scenarios (e.g., testing that protected pages redirect unauthenticated users, or that public pages are accessible without login).
 
 Generate thorough but focused tests. Each test should verify one specific behavior."""
 

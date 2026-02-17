@@ -71,27 +71,43 @@ class Orchestrator:
 
         # Stage 1: Crawl
         logger.info("--- Stage 1: Crawl ---")
+        stage_start = time.time()
         site_model = await self._crawl()
         self._save_site_model(site_model)
+        logger.info("--- Stage 1 complete: %d pages discovered in %.1fs ---",
+                     len(site_model.pages), time.time() - stage_start)
 
         # Stage 2: Plan
         logger.info("--- Stage 2: Plan ---")
+        stage_start = time.time()
         plan = self._plan(site_model)
         self._save_plan(plan)
+        logger.info("--- Stage 2 complete: %d test cases generated in %.1fs ---",
+                     len(plan.test_cases), time.time() - stage_start)
 
         # Stage 3: Execute
-        logger.info("--- Stage 3: Execute ---")
+        logger.info("--- Stage 3: Execute (%d tests) ---", len(plan.test_cases))
+        stage_start = time.time()
         run_result = await self._execute(plan)
+        logger.info("--- Stage 3 complete: %d passed, %d failed in %.1fs ---",
+                     run_result.passed, run_result.failed, time.time() - stage_start)
 
         # Stage 4: Update coverage
         logger.info("--- Stage 4: Update Coverage ---")
+        stage_start = time.time()
+        logger.debug("Loading coverage registry...")
         registry = self.registry_manager.load()
+        logger.debug("Updating registry with run results...")
         registry = self.registry_manager.update_from_run(registry, run_result)
         self.registry_manager.save(registry)
+        logger.info("--- Stage 4 complete in %.1fs ---", time.time() - stage_start)
 
         # Stage 5: Report
         logger.info("--- Stage 5: Report ---")
+        stage_start = time.time()
         reports = self._report(run_result, registry)
+        logger.info("--- Stage 5 complete: %d reports generated in %.1fs ---",
+                     len(reports), time.time() - stage_start)
 
         duration = time.time() - start
         logger.info("=== Pipeline complete in %.1fs ===", duration)
@@ -115,7 +131,7 @@ class Orchestrator:
 
     async def _crawl(self) -> SiteModel:
         site_model_dir = self.framework_dir / "site_model"
-        crawler = Crawler(self.config, site_model_dir)
+        crawler = Crawler(self.config, site_model_dir, ai_client=self.ai_client)
         return await crawler.crawl()
 
     def run_crawl_only(self) -> SiteModel:
@@ -123,7 +139,10 @@ class Orchestrator:
         return asyncio.run(self._crawl())
 
     def _plan(self, site_model: SiteModel) -> TestPlan:
+        logger.debug("Loading coverage registry for gap analysis...")
         registry = self.registry_manager.load()
+        logger.debug("Analyzing coverage gaps (staleness=%d days)...",
+                      self.config.staleness_threshold_days)
         gap_report = analyze_gaps(
             registry, site_model, self.config.staleness_threshold_days
         )
@@ -165,6 +184,7 @@ class Orchestrator:
     def _save_site_model(self, model: SiteModel) -> None:
         path = self.framework_dir / "site_model" / "model.json"
         path.parent.mkdir(parents=True, exist_ok=True)
+        logger.debug("Saving site model to %s", path)
         with open(path, "w") as f:
             json.dump(model.model_dump(), f, indent=2, default=str)
 
@@ -178,6 +198,7 @@ class Orchestrator:
 
     def _save_plan(self, plan: TestPlan) -> None:
         path = self.framework_dir / "latest_plan.json"
+        logger.debug("Saving test plan to %s", path)
         with open(path, "w") as f:
             json.dump(plan.model_dump(), f, indent=2, default=str)
 

@@ -33,10 +33,12 @@ class AuthConfig(BaseModel):
     login_url: str
     username: str
     password: str
-    username_selector: str = "input[name='username'], input[type='email']"
-    password_selector: str = "input[name='password'], input[type='password']"
-    submit_selector: str = "button[type='submit']"
+    username_selector: str = ""
+    password_selector: str = ""
+    submit_selector: str = ""
     success_indicator: str = ""
+    auto_detect: bool = True
+    llm_fallback: bool = True
 
     @field_validator("password", mode="before")
     @classmethod

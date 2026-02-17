@@ -36,11 +36,15 @@ class Planner:
         logger.info("Generating test plan for %s", site_model.base_url)
 
         # Build a summarized site model (to fit in context window)
+        logger.debug("Summarizing site model (%d pages, %d API endpoints)...",
+                      len(site_model.pages), len(site_model.api_endpoints))
         site_summary = self._summarize_site_model(site_model)
+        logger.debug("Site summary: %d chars", len(site_summary))
 
         # Build coverage gaps summary
         gaps_summary = "{}"
         if gap_report:
+            logger.debug("Building coverage gaps summary...")
             gaps_summary = gap_report.model_dump_json(indent=2)
 
         # Build config summary
@@ -52,6 +56,8 @@ class Planner:
         )
 
         # Build the prompt
+        logger.debug("Building planning prompt (categories: %s, max_tests: %d)...",
+                      ', '.join(self.config.categories), self.config.max_tests_per_run)
         user_message = build_planning_prompt(
             site_model_json=site_summary,
             coverage_gaps_json=gaps_summary,
@@ -59,21 +65,27 @@ class Planner:
             hints=self.config.hints,
             max_tests=self.config.max_tests_per_run,
         )
+        logger.debug("Planning prompt built: %d chars", len(user_message))
 
         # Call AI
         try:
+            logger.info("Requesting AI-generated test plan...")
             plan_data = self.ai_client.complete_json(
                 system_prompt=PLANNING_SYSTEM_PROMPT,
                 user_message=user_message,
                 max_tokens=self.config.ai_max_planning_tokens,
             )
+            logger.debug("AI returned plan data with %d test cases",
+                          len(plan_data.get("test_cases", [])))
         except Exception as e:
             logger.error("AI planning failed: %s. Generating fallback plan.", e)
             return self._generate_fallback_plan(site_model)
 
         # Parse and validate
         try:
+            logger.debug("Parsing AI plan response...")
             plan = self._parse_plan(plan_data, site_model)
+            logger.debug("Validating test plan...")
             errors = validate_test_plan(plan)
             if errors:
                 logger.warning("Plan validation warnings: %s", errors)
@@ -103,6 +115,7 @@ class Planner:
                 "url": page.url,
                 "page_type": page.page_type,
                 "title": page.title,
+                "auth_required": page.auth_required,
                 "interactive_elements_count": sum(1 for e in page.elements if e.is_interactive),
                 "forms": [
                     {

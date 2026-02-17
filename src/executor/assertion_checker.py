@@ -41,7 +41,9 @@ async def check_assertion(
     run_id: str = "",
 ) -> AssertionResult:
     """Evaluate a single assertion and return the result."""
-    logger.debug("Checking assertion: %s", assertion.assertion_type)
+    logger.debug("Checking assertion: %s | selector=%s | %s",
+                 assertion.assertion_type, assertion.selector,
+                 assertion.description or "")
     try:
         match assertion.assertion_type:
             case "element_visible":
@@ -75,6 +77,7 @@ async def check_assertion(
             case _:
                 return AssertionResult(False, f"Unknown assertion type: {assertion.assertion_type}")
     except Exception as e:
+        logger.debug("Assertion error: %s — %s", assertion.assertion_type, e)
         return AssertionResult(False, f"Assertion error: {e}")
 
 
@@ -194,8 +197,10 @@ async def _check_screenshot_diff(
     messages: list[str] = []
     captured_screenshots: list[str] = []
 
-    for vp in viewports:
+    for vp_idx, vp in enumerate(viewports):
         # Resize to this viewport
+        logger.debug("Visual diff: viewport %d/%d — %s (%dx%d)",
+                     vp_idx + 1, len(viewports), vp.name, vp.width, vp.height)
         await page.set_viewport_size({"width": vp.width, "height": vp.height})
 
         # Wait for layout to stabilize after resize
