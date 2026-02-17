@@ -23,6 +23,8 @@ from src.models.site_model import (
     SiteModel,
 )
 
+from src.url_utils import normalize_url, page_id_from_url
+
 from .element_extractor import extract_elements
 from .form_analyzer import analyze_forms
 from .spa_handler import detect_spa_type, discover_spa_routes
@@ -38,18 +40,12 @@ PRIORITY_SITEMAP = 50     # Links from sitemap.xml (backfill)
 
 def _normalize_url(url: str) -> str:
     """Normalize a URL for deduplication."""
-    parsed = urlparse(url)
-    path = parsed.path.rstrip("/") or "/"
-    query = ""
-    if parsed.query:
-        params = sorted(parsed.query.split("&"))
-        query = "?" + "&".join(params)
-    return f"{parsed.scheme}://{parsed.netloc}{path}{query}"
+    return normalize_url(url)
 
 
 def _page_id(url: str) -> str:
     """Generate a stable page ID from the normalized URL."""
-    return hashlib.md5(_normalize_url(url).encode()).hexdigest()[:12]
+    return page_id_from_url(url)
 
 
 def _is_same_origin(base_url: str, candidate_url: str) -> bool:
@@ -148,6 +144,7 @@ class Crawler:
             )
 
             auth_flow = None
+            post_login_url = None
             if self.config.auth:
                 logger.info("Authenticating before crawl...")
                 result = await perform_smart_auth(
@@ -155,11 +152,12 @@ class Crawler:
                 )
                 if result.success:
                     auth_flow = result.auth_flow
+                    post_login_url = result.post_login_url
                     logger.info("Authentication successful")
                 else:
                     logger.error("Authentication failed: %s", result.error)
 
-            await self._priority_crawl(context, target)
+            await self._priority_crawl(context, target, post_login_url=post_login_url)
 
             # Probe auth requirements for each discovered page
             if self.config.auth and auth_flow:
@@ -249,12 +247,20 @@ class Crawler:
     # Core crawl loop
     # ------------------------------------------------------------------
 
-    async def _priority_crawl(self, context: BrowserContext, start_url: str) -> None:
+    async def _priority_crawl(
+        self, context: BrowserContext, start_url: str,
+        post_login_url: str | None = None,
+    ) -> None:
         """Priority-based crawl: organic links first, sitemap as backfill."""
         heap: list[_CrawlEntry] = []
 
         # Queue the start URL at highest priority
         self._enqueue(heap, start_url, depth=0, priority=PRIORITY_START)
+
+        # Seed the post-login URL so authenticated pages get crawled
+        if post_login_url and _normalize_url(post_login_url) != _normalize_url(start_url):
+            logger.info("Seeding post-login URL into crawl queue: %s", post_login_url)
+            self._enqueue(heap, post_login_url, depth=0, priority=PRIORITY_START)
 
         # Open a single page we'll reuse for the entire crawl
         page = await context.new_page()

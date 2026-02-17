@@ -22,6 +22,7 @@ from src.models.test_result import (
     TestResult,
 )
 from src.models.visual_baseline import VisualBaselineRegistry
+from src.url_utils import page_id_from_url
 
 from .action_runner import run_action
 from .assertion_checker import check_assertion
@@ -88,6 +89,7 @@ class Executor:
                             test_id=tc.test_id, test_name=tc.name,
                             description=tc.description, category=tc.category,
                             priority=tc.priority, target_page_id=tc.target_page_id,
+                            coverage_signature=tc.coverage_signature,
                             result="skip", failure_reason="Time limit reached",
                         ))
                     continue
@@ -101,6 +103,7 @@ class Executor:
                             test_id=tc.test_id, test_name=tc.name,
                             description=tc.description, category=tc.category,
                             priority=tc.priority, target_page_id=tc.target_page_id,
+                            coverage_signature=tc.coverage_signature,
                             result="skip", failure_reason="Time limit reached",
                         ))
                         continue
@@ -115,6 +118,12 @@ class Executor:
                     logger.info("[%s] %s: %s (%.1fs)",
                                 result.result.upper(), tc.test_id, tc.name,
                                 result.duration_seconds or 0)
+
+                    # Re-authenticate if the test invalidated the session (e.g. logout)
+                    if self.config.auth and self._session_invalidated(result):
+                        logger.info("Session invalidated by %s, re-authenticating...",
+                                    tc.test_id)
+                        await self._authenticate(context)
 
             await browser.close()
 
@@ -153,6 +162,20 @@ class Executor:
             logger.info("Executor auth successful (method=%s)", method)
         else:
             logger.error("Executor auth failed: %s", result.error)
+
+    @staticmethod
+    def _session_invalidated(result: TestResult) -> bool:
+        """Check if a test likely invalidated the auth session (e.g. logout)."""
+        if not result.evidence or not result.evidence.network_log:
+            return False
+        for entry in result.evidence.network_log:
+            url = (entry.get("url") or "").lower()
+            method = (entry.get("method") or "").upper()
+            if method == "POST" and any(
+                kw in url for kw in ("logout", "signout", "sign-out", "log-out")
+            ):
+                return True
+        return False
 
     async def _run_test(
         self, context, test_case: TestCase, baseline_dir: Path | None,
@@ -321,6 +344,18 @@ class Executor:
                             error_message=str(e), screenshot_path=fail_screenshot,
                         ))
 
+            # Capture the actual page the browser is on after steps execute.
+            # This may differ from target_page_id when tests navigate (e.g. login → dashboard).
+            # Only track valid HTTP(S) URLs — skip about:blank, data:, etc.
+            current_url = page.url
+            if current_url.startswith(("http://", "https://")):
+                actual_page_id = page_id_from_url(current_url)
+            else:
+                actual_page_id = tc.target_page_id
+            if actual_page_id != tc.target_page_id and tc.target_page_id:
+                logger.info("Test navigated: target_page_id=%s, actual page=%s (%s)",
+                            tc.target_page_id, actual_page_id, current_url)
+
             # === ASSERTIONS ===
             logger.debug("  Checking %d assertions...", len(tc.assertions))
             passed_count = 0
@@ -384,6 +419,9 @@ class Executor:
                 category=tc.category,
                 priority=tc.priority,
                 target_page_id=tc.target_page_id,
+                actual_page_id=actual_page_id,
+                actual_url=current_url if current_url.startswith(("http://", "https://")) else "",
+                coverage_signature=tc.coverage_signature,
                 result=test_result_status,
                 duration_seconds=round(time.time() - test_start, 2),
                 failure_reason="; ".join(failure_reasons) if failure_reasons else None,
@@ -407,6 +445,7 @@ class Executor:
                 category=tc.category,
                 priority=tc.priority,
                 target_page_id=tc.target_page_id,
+                coverage_signature=tc.coverage_signature,
                 result="error",
                 duration_seconds=round(time.time() - test_start, 2),
                 failure_reason=str(e),

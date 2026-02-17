@@ -30,7 +30,7 @@ def _get_debug_dir() -> Path:
     """Get or create the debug directory."""
     global _debug_dir
     if _debug_dir is None:
-        _debug_dir = Path("./qa-framework") / "debug"
+        _debug_dir = Path(".qa-framework") / "debug"
     _debug_dir.mkdir(parents=True, exist_ok=True)
     return _debug_dir
 
