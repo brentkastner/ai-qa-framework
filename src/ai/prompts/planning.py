@@ -38,7 +38,7 @@ REQUIRED RESPONSE FORMAT (plain JSON, no markdown fences):
       "steps": [ (same Action schema as preconditions) ],
       "assertions": [
         {
-          "assertion_type": "element_visible | element_hidden | text_contains | text_equals | text_matches | url_matches | screenshot_diff | element_count | network_request_made | no_console_errors | response_status | ai_evaluate",
+          "assertion_type": "element_visible | element_hidden | text_contains | text_equals | text_matches | url_matches | screenshot_diff | element_count | network_request_made | no_console_errors | response_status | ai_evaluate | page_title_contains | page_loaded",
           "selector": "string or null",
           "expected_value": "string or null",
           "tolerance": "float or null",
@@ -68,6 +68,7 @@ REQUIRED RESPONSE FORMAT (plain JSON, no markdown fences):
    - Use text_matches with regex patterns for flexible text matching (e.g., "Welcome.*|Dashboard|My Account" to match various post-login states).
    - Use ai_evaluate when the expected outcome is ambiguous and best described as an intent (e.g., "user appears to be logged in", "form submission was accepted", "search results are displayed"). Set expected_value to a clear natural language intent description. The AI will judge the actual page state at runtime.
    - NEVER guess what text a site will display after an action. If you cannot determine the exact text from the site model, use element_visible, url_matches, or ai_evaluate instead.
+   - For page load verification: prefer `page_loaded` (verifies page is not blank, optionally checks for a key element) or `page_title_contains` with a short keyword (e.g., "Products" not "Products - My Store | Home"). AVOID using `text_contains` or `text_equals` with selector "title" — page titles are dynamic and frequently include CMS-appended suffixes, separators, or A/B test variants that break exact matches. Use `url_matches` or `page_loaded` for reliable page load checks.
 9. **Auth-aware tests:** Pages in the site model may have an `auth_required` field.
    - If the site model has `"has_auth": true`, authentication is configured. The test execution framework handles authentication automatically via a shared browser session, so you do NOT need to add login steps as preconditions for tests on auth-protected pages. However, if you want to explicitly test the login flow itself (e.g., verifying form submission, error handling, or that the login page works correctly), use these exact placeholder tokens in Action `value` fields:
      - `{{auth_login_url}}` — the login page URL (use in navigate action values)

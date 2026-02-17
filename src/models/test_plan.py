@@ -16,8 +16,9 @@ class Action(BaseModel):
 
 class Assertion(BaseModel):
     assertion_type: str  # element_visible, element_hidden, text_contains, text_equals,
-    # url_matches, screenshot_diff, element_count,
-    # network_request_made, no_console_errors, response_status
+    # text_matches, url_matches, screenshot_diff, element_count,
+    # network_request_made, no_console_errors, response_status,
+    # ai_evaluate, page_title_contains, page_loaded
     selector: Optional[str] = None
     expected_value: Optional[str] = None
     tolerance: Optional[float] = None
