@@ -59,7 +59,7 @@ REQUIRED RESPONSE FORMAT (plain JSON, no markdown fences):
 3. **Security tests:** Inject XSS payloads into form fields and verify sanitization. Check HTTPS enforcement, cookie security attributes, open redirect vectors, and error page information leakage.
 4. **Prioritization:** Forms and interactive elements get higher priority. Static pages get lower priority. Recently failed areas get highest priority.
 5. **Selectors:** Prefer data-testid attributes, then ARIA roles/labels, then stable CSS selectors. Avoid fragile positional selectors.
-6. **Test data:** Generate realistic test data for form fills. Use invalid data for negative tests (empty required fields, malformed emails, XSS payloads for security).
+6. **Test data:** Generate realistic test data for form fills. Use invalid data for negative tests (empty required fields, malformed emails, XSS payloads for security). When a field needs a unique value (e.g., usernames, IDs, vault names), use the dynamic variable `{{$timestamp}}` in the value string (e.g., `"testuser-{{$timestamp}}"`) — it will be replaced with a Unix epoch timestamp at runtime to ensure uniqueness.
 7. **Budget:** Respect the max_tests limit. Allocate budget proportionally: ~50% functional, ~30% visual, ~20% security (adjustable by hints).
 8. **Assertion robustness:** Prefer behavioral/structural assertions over text matching. This is critical for reliable tests.
    - After form submissions: assert URL changed (url_matches), form disappeared (element_hidden), or new UI appeared (element_visible). Do NOT assert for specific success/error text you have not observed on the site.
@@ -68,11 +68,13 @@ REQUIRED RESPONSE FORMAT (plain JSON, no markdown fences):
    - Use text_matches with regex patterns for flexible text matching (e.g., "Welcome.*|Dashboard|My Account" to match various post-login states).
    - Use ai_evaluate when the expected outcome is ambiguous and best described as an intent (e.g., "user appears to be logged in", "form submission was accepted", "search results are displayed"). Set expected_value to a clear natural language intent description. The AI will judge the actual page state at runtime.
    - NEVER guess what text a site will display after an action. If you cannot determine the exact text from the site model, use element_visible, url_matches, or ai_evaluate instead.
-9. **Auth-aware tests:** Pages in the site model may have an `auth_required` field. Pages with `auth_required: true` need authentication before testing. The test execution framework handles authentication automatically via a shared browser session, so you do NOT need to add login steps as preconditions for tests on auth-protected pages. However, if you want to explicitly test the login flow itself (e.g., verifying form submission, error handling, or that the login page works correctly), use these exact placeholder tokens in Action `value` fields:
-   - `{{auth_login_url}}` — the login page URL (use in navigate action values)
-   - `{{auth_username}}` — the test username/email (use in fill action values for username/email fields)
-   - `{{auth_password}}` — the test password (use in fill action values for password fields)
-   These placeholders will be replaced with real credentials after plan generation. Do NOT invent usernames, passwords, or login URLs — always use these exact placeholder tokens when a test needs to interact with authentication fields. For `auth_required: false` pages, you can test without authentication. Use auth information to design appropriate test scenarios (e.g., testing that protected pages redirect unauthenticated users, or that public pages are accessible without login).
+9. **Auth-aware tests:** Pages in the site model may have an `auth_required` field.
+   - If the site model has `"has_auth": true`, authentication is configured. The test execution framework handles authentication automatically via a shared browser session, so you do NOT need to add login steps as preconditions for tests on auth-protected pages. However, if you want to explicitly test the login flow itself (e.g., verifying form submission, error handling, or that the login page works correctly), use these exact placeholder tokens in Action `value` fields:
+     - `{{auth_login_url}}` — the login page URL (use in navigate action values)
+     - `{{auth_username}}` — the test username/email (use in fill action values for username/email fields)
+     - `{{auth_password}}` — the test password (use in fill action values for password fields)
+     These placeholders will be replaced with real credentials after plan generation. Do NOT invent usernames, passwords, or login URLs — always use these exact placeholder tokens when a test needs to interact with authentication fields.
+   - If the site model has `"has_auth": false`, NO authentication credentials are configured. Do NOT generate any test cases that use `{{auth_login_url}}`, `{{auth_username}}`, or `{{auth_password}}` placeholder tokens. Do NOT generate tests that require logging in. Only test publicly accessible pages. If a page has `auth_required: true`, you may test that it redirects unauthenticated users or shows an access-denied state, but do NOT attempt to fill in login forms or navigate to login URLs.
 
 Generate thorough but focused tests. Each test should verify one specific behavior."""
 
