@@ -24,7 +24,7 @@ from src.models.test_result import (
 from src.models.visual_baseline import VisualBaselineRegistry
 from src.url_utils import page_id_from_url
 
-from .action_runner import run_action
+from .action_runner import resolve_dynamic_vars_for_test_case, run_action
 from .assertion_checker import check_assertion
 from .evidence_collector import EvidenceCollector
 from .fallback import FallbackHandler
@@ -185,6 +185,10 @@ class Executor:
         test_start = time.time()
         evidence_dir = self.run_dir / "evidence" / tc.test_id
         evidence_dir.mkdir(parents=True, exist_ok=True)
+
+        # Resolve dynamic variables (e.g. {{$timestamp}}) once for the entire
+        # test case so preconditions and steps share the same values.
+        resolve_dynamic_vars_for_test_case(tc.preconditions + tc.steps)
 
         collector = EvidenceCollector(evidence_dir)
         fallback_handler = None

@@ -289,15 +289,41 @@ class Planner:
             estimated_duration_seconds=len(test_cases) * 10,
         )
 
+    @staticmethod
+    def _has_auth_placeholders(tc: TestCase) -> bool:
+        """Check if a test case contains any unresolved auth placeholder tokens."""
+        tokens = (AUTH_PLACEHOLDER_USERNAME, AUTH_PLACEHOLDER_PASSWORD, AUTH_PLACEHOLDER_LOGIN_URL)
+        for action in tc.preconditions + tc.steps:
+            if action.value and any(t in action.value for t in tokens):
+                return True
+        for assertion in tc.assertions:
+            if assertion.expected_value and any(t in assertion.expected_value for t in tokens):
+                return True
+        return False
+
     def _inject_credentials(self, plan: TestPlan) -> TestPlan:
         """Replace auth placeholder tokens in the plan with real credentials.
 
         Walks all Action.value fields in preconditions and steps, and
         Assertion.expected_value fields, substituting well-known placeholder
         tokens with actual credentials from self.config.auth.
+
+        When auth is not configured, any test cases that still contain
+        auth placeholders are removed from the plan as a safety net.
         """
         auth = self.config.auth
         if not auth:
+            original_count = len(plan.test_cases)
+            plan.test_cases = [
+                tc for tc in plan.test_cases
+                if not self._has_auth_placeholders(tc)
+            ]
+            removed = original_count - len(plan.test_cases)
+            if removed:
+                logger.info(
+                    "Removed %d test case(s) with auth placeholders (no auth configured)",
+                    removed,
+                )
             return plan
 
         substitutions = {
