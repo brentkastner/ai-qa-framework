@@ -16,6 +16,7 @@ from playwright.async_api import BrowserContext, Page, async_playwright
 
 from src.models.config import FrameworkConfig
 from src.auth.smart_auth import perform_smart_auth
+from src.utils.browser_stealth import launch_stealth_browser, create_stealth_context, human_delay
 from src.models.site_model import (
     APIEndpoint,
     NetworkRequest,
@@ -131,11 +132,12 @@ class Crawler:
         logger.info("Starting crawl of %s", target)
 
         async with async_playwright() as p:
-            logger.debug("Launching headless Chromium browser...")
-            browser = await p.chromium.launch(headless=True)
-            logger.debug("Creating browser context (viewport=%dx%d)",
+            logger.debug("Launching stealth Chromium browser...")
+            browser = await launch_stealth_browser(p)
+            logger.debug("Creating stealth browser context (viewport=%dx%d)",
                          self.crawl_config.viewport.width, self.crawl_config.viewport.height)
-            context = await browser.new_context(
+            context = await create_stealth_context(
+                browser,
                 viewport={
                     "width": self.crawl_config.viewport.width,
                     "height": self.crawl_config.viewport.height,
@@ -291,6 +293,10 @@ class Crawler:
             )
 
             network_requests.clear()
+
+            # Human-like pause between page navigations
+            if len(self._visited_urls) > 1:
+                await human_delay(page, min_ms=300, max_ms=1200)
 
             try:
                 loaded = await self._navigate_with_retry(page, url)

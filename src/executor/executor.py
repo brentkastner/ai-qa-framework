@@ -12,6 +12,7 @@ from playwright.async_api import async_playwright
 
 from src.ai.client import AIClient
 from src.auth.smart_auth import perform_smart_auth
+from src.utils.browser_stealth import launch_stealth_browser, create_stealth_context
 from src.coverage.visual_baseline_registry import VisualBaselineRegistryManager
 from src.models.config import FrameworkConfig
 from src.models.test_plan import TestCase, TestPlan
@@ -73,9 +74,13 @@ class Executor:
         test_counter = 0
 
         async with async_playwright() as p:
-            logger.debug("Launching headless Chromium for test execution...")
-            browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context(viewport={"width": 1280, "height": 720})
+            logger.debug("Launching stealth Chromium for test execution...")
+            browser = await launch_stealth_browser(p)
+            context = await create_stealth_context(
+                browser,
+                viewport={"width": 1280, "height": 720},
+                user_agent=self.config.crawl.user_agent,
+            )
 
             if self.config.auth:
                 logger.info("Authenticating before test execution...")

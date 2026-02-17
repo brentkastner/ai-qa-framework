@@ -9,6 +9,7 @@ import time
 from playwright.async_api import Page
 
 from src.models.test_plan import Action
+from src.utils.browser_stealth import human_delay
 
 logger = logging.getLogger(__name__)
 
@@ -69,12 +70,14 @@ async def run_action(page: Page, action: Action, timeout: int = 30000) -> None:
         case "click":
             if not action.selector:
                 raise ValueError("click action requires a selector")
+            await human_delay(page, min_ms=50, max_ms=250)
             logger.debug("Clicking: %s", action.selector)
             await page.click(action.selector, timeout=timeout)
 
         case "fill":
             if not action.selector:
                 raise ValueError("fill action requires a selector")
+            await human_delay(page, min_ms=80, max_ms=300)
             logger.debug("Filling %s with '%s'", action.selector,
                          "***" if "password" in (action.selector or "").lower() else action.value)
             await page.fill(action.selector, action.value or "", timeout=timeout)
@@ -82,12 +85,14 @@ async def run_action(page: Page, action: Action, timeout: int = 30000) -> None:
         case "select":
             if not action.selector:
                 raise ValueError("select action requires a selector")
+            await human_delay(page, min_ms=50, max_ms=250)
             logger.debug("Selecting '%s' in %s", action.value, action.selector)
             await page.select_option(action.selector, action.value or "", timeout=timeout)
 
         case "hover":
             if not action.selector:
                 raise ValueError("hover action requires a selector")
+            await human_delay(page, min_ms=30, max_ms=150)
             logger.debug("Hovering over: %s", action.selector)
             await page.hover(action.selector, timeout=timeout)
 
