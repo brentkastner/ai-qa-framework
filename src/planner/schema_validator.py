@@ -17,7 +17,7 @@ VALID_ASSERTION_TYPES = {
     "element_visible", "element_hidden", "text_contains", "text_equals",
     "text_matches", "url_matches", "screenshot_diff", "element_count",
     "network_request_made", "no_console_errors", "response_status",
-    "ai_evaluate",
+    "ai_evaluate", "page_title_contains", "page_loaded",
 }
 
 

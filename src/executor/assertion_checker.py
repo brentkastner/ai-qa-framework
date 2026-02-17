@@ -75,6 +75,10 @@ async def check_assertion(
                 return _check_response_status(assertion, network_log)
             case "ai_evaluate":
                 return await _check_ai_evaluate(page, assertion, evidence_dir, ai_client)
+            case "page_title_contains":
+                return await _check_page_title_contains(page, assertion)
+            case "page_loaded":
+                return await _check_page_loaded(page, assertion)
             case _:
                 return AssertionResult(False, f"Unknown assertion type: {assertion.assertion_type}")
     except Exception as e:
@@ -111,6 +115,12 @@ async def _check_text_contains(page: Page, assertion: Assertion) -> AssertionRes
     if not assertion.expected_value:
         return AssertionResult(False, "No expected_value")
     if assertion.selector:
+        # Use page.title() for <title> selector — more reliable than DOM query
+        if assertion.selector.strip().lower() == "title":
+            title = await page.title() or ""
+            if assertion.expected_value.lower() in title.lower():
+                return AssertionResult(True, f"Found '{assertion.expected_value}' in page title '{title}'")
+            return AssertionResult(False, f"'{assertion.expected_value}' not in page title '{title}'")
         try:
             el = await page.wait_for_selector(assertion.selector, timeout=5000)
             text = await el.text_content() or "" if el else ""
@@ -130,8 +140,12 @@ async def _check_text_equals(page: Page, assertion: Assertion) -> AssertionResul
     if not assertion.selector or not assertion.expected_value:
         return AssertionResult(False, "Missing selector or expected_value")
     try:
-        el = await page.wait_for_selector(assertion.selector, timeout=5000)
-        text = (await el.text_content() or "").strip() if el else ""
+        # Use page.title() for <title> selector — more reliable than DOM query
+        if assertion.selector.strip().lower() == "title":
+            text = (await page.title() or "").strip()
+        else:
+            el = await page.wait_for_selector(assertion.selector, timeout=5000)
+            text = (await el.text_content() or "").strip() if el else ""
         if text == assertion.expected_value:
             return AssertionResult(True, "Text matches")
         return AssertionResult(False, f"Expected '{assertion.expected_value}', got '{text}'")
@@ -157,6 +171,43 @@ async def _check_text_matches(page: Page, assertion: Assertion) -> AssertionResu
         return AssertionResult(False, f"Invalid regex pattern: {e}")
     except Exception as e:
         return AssertionResult(False, str(e))
+
+
+async def _check_page_title_contains(page: Page, assertion: Assertion) -> AssertionResult:
+    """Check that the document title contains the expected substring (case-insensitive).
+
+    Uses Playwright's page.title() instead of querying a DOM selector,
+    making this resilient to dynamic title suffixes, separators, and CMS changes.
+    """
+    if not assertion.expected_value:
+        return AssertionResult(False, "No expected_value for page_title_contains")
+    title = await page.title() or ""
+    if assertion.expected_value.lower() in title.lower():
+        return AssertionResult(True, f"Page title contains '{assertion.expected_value}' (title: '{title}')")
+    return AssertionResult(False, f"Page title '{title}' does not contain '{assertion.expected_value}'")
+
+
+async def _check_page_loaded(page: Page, assertion: Assertion) -> AssertionResult:
+    """Verify that a page loaded successfully without depending on specific text content.
+
+    Checks that the page is not blank (has a title or body content).
+    If a selector is provided, also verifies that element is visible.
+    """
+    title = await page.title() or ""
+    body_text = (await page.text_content("body") or "").strip()
+
+    if not title and not body_text:
+        return AssertionResult(False, "Page appears blank (no title, no body text)")
+
+    if assertion.selector:
+        try:
+            el = await page.wait_for_selector(assertion.selector, state="visible", timeout=5000)
+            if el:
+                return AssertionResult(True, f"Page loaded, key element '{assertion.selector}' visible (title: '{title[:60]}')")
+        except Exception:
+            return AssertionResult(False, f"Page loaded but key element '{assertion.selector}' not found")
+
+    return AssertionResult(True, f"Page loaded (title: '{title[:60]}')")
 
 
 def _check_url_matches(page: Page, assertion: Assertion) -> AssertionResult:
