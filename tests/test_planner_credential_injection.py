@@ -81,14 +81,14 @@ class TestInjectCredentials:
         result = planner._inject_credentials(plan)
         assert result.test_cases[0].steps[0].value == "https://example.com/login"
 
-    def test_no_auth_config_is_noop(self, config_no_auth):
+    def test_no_auth_config_strips_auth_test_cases(self, config_no_auth):
         planner = Planner(config_no_auth, ai_client=None)
         plan = _make_plan([
             Action(action_type="fill", selector="#email",
                    value=AUTH_PLACEHOLDER_USERNAME),
         ])
         result = planner._inject_credentials(plan)
-        assert result.test_cases[0].steps[0].value == AUTH_PLACEHOLDER_USERNAME
+        assert len(result.test_cases) == 0
 
     def test_no_placeholders_is_noop(self, config_with_auth):
         planner = Planner(config_with_auth, ai_client=None)
