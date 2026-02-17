@@ -151,6 +151,12 @@ class TestPlanningPrompts:
         assert "unique vault names" in prompt.lower()
         assert "login" in prompt.lower()
 
+    def test_planning_prompt_mentions_auth_placeholders(self):
+        """Test planning prompt instructs LLM to use auth placeholder tokens."""
+        assert "{{auth_username}}" in PLANNING_SYSTEM_PROMPT
+        assert "{{auth_password}}" in PLANNING_SYSTEM_PROMPT
+        assert "{{auth_login_url}}" in PLANNING_SYSTEM_PROMPT
+
     def test_build_planning_prompt_includes_max_tests(self):
         """Test planning prompt includes max_tests limit."""
         prompt = build_planning_prompt(
