@@ -15,6 +15,7 @@ from src.models.coverage import (
     SignatureRecord,
     TestResultSummary,
 )
+from src.models.site_model import SiteModel
 from src.models.test_result import RunResult, TestResult
 
 logger = logging.getLogger(__name__)
@@ -47,18 +48,38 @@ class CoverageRegistryManager:
             json.dump(registry.model_dump(), f, indent=2)
         logger.debug("Saved coverage registry to %s", self.path)
 
-    def update_from_run(self, registry: CoverageRegistry, run_result: RunResult) -> CoverageRegistry:
+    def update_from_run(
+        self, registry: CoverageRegistry, run_result: RunResult,
+        site_model: SiteModel | None = None,
+    ) -> CoverageRegistry:
         """Update coverage registry with results from a test run."""
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ")
 
+        # Build a lookup from site model for page metadata
+        page_lookup: dict[str, tuple[str, str]] = {}
+        if site_model:
+            for p in site_model.pages:
+                page_lookup[p.page_id] = (p.url, p.page_type)
+
         for test_result in run_result.test_results:
-            page_id = test_result.test_id.rsplit("_", 1)[0] if "_" in test_result.test_id else test_result.test_id
+            # Prefer actual_page_id (where the browser ended up) over target_page_id
+            # (where the test plan said to start). This correctly attributes coverage
+            # when tests navigate across pages (e.g. login → dashboard).
+            page_id = (
+                test_result.actual_page_id
+                or test_result.target_page_id
+                or test_result.test_id
+            )
             category = test_result.category
 
             # Ensure page entry exists
             if page_id not in registry.pages:
+                url, page_type = page_lookup.get(page_id, ("", ""))
+                # Fall back to actual_url from test result for pages not in site model
+                if not url and test_result.actual_url:
+                    url = test_result.actual_url
                 registry.pages[page_id] = PageCoverage(
-                    page_id=page_id, url="", page_type="",
+                    page_id=page_id, url=url, page_type=page_type,
                 )
 
             page_cov = registry.pages[page_id]
@@ -73,7 +94,7 @@ class CoverageRegistryManager:
             cat_cov.last_tested = now
 
             # Update signature record
-            sig = test_result.test_name  # Use test name as coverage signature
+            sig = test_result.coverage_signature or test_result.test_name
             existing = None
             for sr in cat_cov.signatures_tested:
                 if sr.signature == sig:

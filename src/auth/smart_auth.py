@@ -28,10 +28,12 @@ class SmartAuthResult:
         success: bool,
         auth_flow: Optional[AuthFlow] = None,
         error: Optional[str] = None,
+        post_login_url: Optional[str] = None,
     ):
         self.success = success
         self.auth_flow = auth_flow
         self.error = error
+        self.post_login_url = post_login_url
 
 
 async def perform_smart_auth(
@@ -72,9 +74,29 @@ async def perform_smart_auth(
         # Verify success
         success = await _verify_login_success(page, auth_config)
         if success:
-            logger.info("Smart auth: login successful (method=%s)", method)
+            # After login verification, wait for any JS-triggered redirect.
+            # Login pages often redirect via JS (e.g., window.location = '/dashboard')
+            # after the fetch response is processed — this may happen AFTER networkidle.
+            login_url_normalized = auth_config.login_url.rstrip("/")
+            try:
+                await page.wait_for_url(
+                    lambda url: url.rstrip("/") != login_url_normalized,
+                    timeout=5000,
+                )
+                # URL changed — wait for the new page to settle
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=5000)
+                except Exception:
+                    pass
+            except Exception:
+                pass  # URL may not change (SPA, in-place auth)
+
+            post_login_url = page.url
+            logger.info("Smart auth: login successful (method=%s), landed on %s",
+                        method, post_login_url)
             return SmartAuthResult(
                 success=True,
+                post_login_url=post_login_url,
                 auth_flow=AuthFlow(
                     login_url=auth_config.login_url,
                     login_method="form",

@@ -15,6 +15,7 @@ from src.coverage.visual_baseline_registry import VisualBaselineRegistryManager
 from src.models.config import FrameworkConfig
 from src.models.test_plan import Assertion
 from src.models.visual_baseline import VisualBaselineRegistry
+from src.url_utils import page_id_from_url
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +185,21 @@ async def _check_screenshot_diff(
 
     if not visual_registry or not visual_registry_manager:
         return AssertionResult(True, "No visual baseline registry configured (first run)")
+
+    # Resolve the actual page_id from the browser's current URL.
+    # The test plan's target_page_id may point to the starting page (e.g. login)
+    # but after steps execute, the browser may be on a different page (e.g. dashboard).
+    # Only override for valid HTTP URLs — skip about:blank, data:, etc.
+    current_url = page.url
+    if current_url.startswith(("http://", "https://")):
+        actual_page_id = page_id_from_url(current_url)
+        if actual_page_id != page_id and page_id:
+            logger.info(
+                "screenshot_diff: browser is on %s (page_id=%s), "
+                "test target was page_id=%s — using actual page for baseline",
+                current_url, actual_page_id, page_id,
+            )
+        page_id = actual_page_id
 
     if not page_id:
         return AssertionResult(True, "No page_id provided — skipping baseline comparison")

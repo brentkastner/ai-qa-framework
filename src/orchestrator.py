@@ -89,6 +89,7 @@ class Orchestrator:
         logger.info("--- Stage 3: Execute (%d tests) ---", len(plan.test_cases))
         stage_start = time.time()
         run_result = await self._execute(plan)
+        self._save_run_result(run_result)
         logger.info("--- Stage 3 complete: %d passed, %d failed in %.1fs ---",
                      run_result.passed, run_result.failed, time.time() - stage_start)
 
@@ -98,14 +99,15 @@ class Orchestrator:
         logger.debug("Loading coverage registry...")
         registry = self.registry_manager.load()
         logger.debug("Updating registry with run results...")
-        registry = self.registry_manager.update_from_run(registry, run_result)
+        registry = self.registry_manager.update_from_run(registry, run_result, site_model=site_model)
         self.registry_manager.save(registry)
         logger.info("--- Stage 4 complete in %.1fs ---", time.time() - stage_start)
 
         # Stage 5: Report
         logger.info("--- Stage 5: Report ---")
         stage_start = time.time()
-        reports = self._report(run_result, registry)
+        previous_run = self._load_previous_run_result(run_result.run_id)
+        reports = self._report(run_result, registry, previous_run=previous_run)
         logger.info("--- Stage 5 complete: %d reports generated in %.1fs ---",
                      len(reports), time.time() - stage_start)
 
@@ -173,11 +175,13 @@ class Orchestrator:
         return asyncio.run(self._execute(plan))
 
     def _report(
-        self, run_result: RunResult, registry=None
+        self, run_result: RunResult, registry=None,
+        previous_run: RunResult | None = None,
     ) -> dict[str, str]:
         reporter = Reporter(self.config, self.ai_client)
         return reporter.generate_reports(
             run_result, registry,
+            previous_run=previous_run,
             output_dir=Path(self.config.report_output_dir),
         )
 
@@ -201,6 +205,39 @@ class Orchestrator:
         logger.debug("Saving test plan to %s", path)
         with open(path, "w") as f:
             json.dump(plan.model_dump(), f, indent=2, default=str)
+
+    def _save_run_result(self, run_result: RunResult) -> None:
+        """Persist RunResult to the run directory for future regression comparison."""
+        path = self.runs_dir / run_result.run_id / "run_result.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        logger.debug("Saving run result to %s", path)
+        with open(path, "w") as f:
+            json.dump(run_result.model_dump(), f, indent=2, default=str)
+
+    def _load_previous_run_result(self, current_run_id: str) -> RunResult | None:
+        """Load the most recent previous RunResult from existing JSON reports."""
+        report_dir = Path(self.config.report_output_dir)
+        if not report_dir.exists():
+            return None
+
+        report_files = sorted(
+            report_dir.glob("report_run_*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+
+        for report_path in report_files:
+            try:
+                with open(report_path) as f:
+                    data = json.load(f)
+                if data.get("run_id") == current_run_id:
+                    continue
+                return RunResult.model_validate(data)
+            except Exception as e:
+                logger.debug("Could not load previous run from %s: %s", report_path, e)
+                continue
+
+        return None
 
     def get_coverage_summary(self) -> str:
         """Get a human-readable coverage summary."""

@@ -53,6 +53,9 @@ class TestResult(BaseModel):
     category: str
     priority: int = 3
     target_page_id: str = ""
+    actual_page_id: str = ""  # page_id derived from browser URL after steps execute
+    actual_url: str = ""  # the browser URL after steps execute
+    coverage_signature: str = ""
     result: str  # pass, fail, skip, error
     duration_seconds: float = 0.0
     failure_reason: Optional[str] = None
