@@ -18,6 +18,13 @@ from .schema_validator import validate_test_plan
 
 logger = logging.getLogger(__name__)
 
+# Well-known placeholder tokens for credential injection.
+# The LLM is instructed to use these in Action.value fields;
+# _inject_credentials() replaces them with real config values after parsing.
+AUTH_PLACEHOLDER_USERNAME = "{{auth_username}}"
+AUTH_PLACEHOLDER_PASSWORD = "{{auth_password}}"
+AUTH_PLACEHOLDER_LOGIN_URL = "{{auth_login_url}}"
+
 
 class Planner:
     """Generates test plans using AI analysis of the site model and coverage gaps."""
@@ -79,7 +86,7 @@ class Planner:
                           len(plan_data.get("test_cases", [])))
         except Exception as e:
             logger.error("AI planning failed: %s. Generating fallback plan.", e)
-            return self._generate_fallback_plan(site_model)
+            return self._inject_credentials(self._generate_fallback_plan(site_model))
 
         # Parse and validate
         try:
@@ -94,11 +101,13 @@ class Planner:
                     tc for tc in plan.test_cases
                     if not any(tc.test_id in err for err in errors)
                 ]
+            # Inject real credentials in place of placeholder tokens
+            plan = self._inject_credentials(plan)
             logger.info("Generated plan with %d test cases", len(plan.test_cases))
             return plan
         except Exception as e:
             logger.error("Failed to parse AI plan: %s. Using fallback.", e)
-            return self._generate_fallback_plan(site_model)
+            return self._inject_credentials(self._generate_fallback_plan(site_model))
 
     def _summarize_site_model(self, site_model: SiteModel) -> str:
         """Create a condensed version of the site model for the AI prompt."""
@@ -279,6 +288,67 @@ class Planner:
             test_cases=test_cases[:self.config.max_tests_per_run],
             estimated_duration_seconds=len(test_cases) * 10,
         )
+
+    def _inject_credentials(self, plan: TestPlan) -> TestPlan:
+        """Replace auth placeholder tokens in the plan with real credentials.
+
+        Walks all Action.value fields in preconditions and steps, and
+        Assertion.expected_value fields, substituting well-known placeholder
+        tokens with actual credentials from self.config.auth.
+        """
+        auth = self.config.auth
+        if not auth:
+            return plan
+
+        substitutions = {
+            AUTH_PLACEHOLDER_USERNAME: auth.username,
+            AUTH_PLACEHOLDER_PASSWORD: auth.password,
+            AUTH_PLACEHOLDER_LOGIN_URL: auth.login_url,
+        }
+
+        sub_count = 0
+
+        for tc in plan.test_cases:
+            for action in tc.preconditions + tc.steps:
+                if action.value:
+                    new_value = action.value
+                    for token, real_value in substitutions.items():
+                        if token in new_value:
+                            new_value = new_value.replace(token, real_value)
+                    if new_value != action.value:
+                        masked = new_value
+                        if auth.password in masked:
+                            masked = masked.replace(auth.password, "***")
+                        logger.debug(
+                            "Credential injection [%s]: '%s' -> '%s'",
+                            tc.test_id, action.value, masked,
+                        )
+                        action.value = new_value
+                        sub_count += 1
+
+            for assertion in tc.assertions:
+                if assertion.expected_value:
+                    new_ev = assertion.expected_value
+                    for token, real_value in substitutions.items():
+                        if token in new_ev:
+                            new_ev = new_ev.replace(token, real_value)
+                    if new_ev != assertion.expected_value:
+                        masked = new_ev
+                        if auth.password in masked:
+                            masked = masked.replace(auth.password, "***")
+                        logger.debug(
+                            "Credential injection [%s assertion]: '%s' -> '%s'",
+                            tc.test_id, assertion.expected_value, masked,
+                        )
+                        assertion.expected_value = new_ev
+                        sub_count += 1
+
+        if sub_count > 0:
+            logger.info("Injected credentials into %d action/assertion fields", sub_count)
+        else:
+            logger.debug("No credential placeholders found in plan")
+
+        return plan
 
 
 def _test_value_for_type(field_type: str, name: str) -> str:
