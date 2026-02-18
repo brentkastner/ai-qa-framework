@@ -6,7 +6,7 @@ import base64
 import logging
 from typing import Optional
 
-from playwright.async_api import BrowserContext, Page
+from playwright.async_api import Browser, BrowserContext, Page
 
 from src.models.config import AuthConfig
 from src.models.site_model import AuthFlow
@@ -417,6 +417,42 @@ async def _llm_detect_login_form(
 # ---------------------------------------------------------------------------
 # Login verification
 # ---------------------------------------------------------------------------
+
+
+async def authenticate_and_capture_state(
+    browser: Browser,
+    auth_config: AuthConfig,
+    ai_client=None,
+    viewport: dict | None = None,
+    user_agent: str | None = None,
+) -> tuple[SmartAuthResult, dict | None]:
+    """Authenticate in a temporary context and capture the resulting storage state.
+
+    Creates a disposable browser context, performs the full smart auth flow,
+    and on success captures cookies + localStorage via Playwright's storageState().
+    The temporary context is always closed before returning.
+
+    Returns:
+        A tuple of (SmartAuthResult, storage_state_dict_or_None).
+        storage_state is None if authentication failed.
+    """
+    from src.utils.browser_stealth import create_stealth_context
+
+    context = await create_stealth_context(
+        browser,
+        viewport=viewport or {"width": 1280, "height": 720},
+        user_agent=user_agent,
+    )
+    try:
+        result = await perform_smart_auth(context, auth_config, ai_client=ai_client)
+        storage_state = None
+        if result.success:
+            storage_state = await context.storage_state()
+            logger.info("Captured auth storage state (%d cookies)",
+                        len(storage_state.get("cookies", [])))
+        return result, storage_state
+    finally:
+        await context.close()
 
 
 async def _verify_login_success(page: Page, auth_config: AuthConfig) -> bool:

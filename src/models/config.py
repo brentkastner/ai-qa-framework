@@ -71,6 +71,7 @@ class FrameworkConfig(BaseModel):
     max_tests_per_run: int = 20
     max_execution_time_seconds: int = 1800
     max_parallel_contexts: int = 3
+    selector_timeout_seconds: int = 10
 
     # AI settings
     ai_model: str = "claude-opus-4-6"

@@ -33,6 +33,7 @@ class TestCase(BaseModel):
     priority: int = 3  # 1 (critical) to 5 (low)
     target_page_id: str = ""
     coverage_signature: str = ""
+    requires_auth: bool = True  # Whether this test needs an authenticated session
     preconditions: list[Action] = Field(default_factory=list)
     steps: list[Action] = Field(default_factory=list)
     assertions: list[Assertion] = Field(default_factory=list)

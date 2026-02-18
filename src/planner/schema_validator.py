@@ -44,6 +44,10 @@ def validate_test_plan(plan: TestPlan) -> list[str]:
         if not 1 <= tc.priority <= 5:
             errors.append(f"{tc.test_id}: priority must be 1-5, got {tc.priority}")
 
+        # requires_auth must be a boolean
+        if not isinstance(tc.requires_auth, bool):
+            errors.append(f"{tc.test_id}: requires_auth must be a boolean, got {type(tc.requires_auth).__name__}")
+
         # At least one step
         if not tc.steps:
             errors.append(f"{tc.test_id}: no steps defined")

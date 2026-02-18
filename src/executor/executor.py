@@ -11,7 +11,7 @@ from pathlib import Path
 from playwright.async_api import async_playwright
 
 from src.ai.client import AIClient
-from src.auth.smart_auth import perform_smart_auth
+from src.auth.smart_auth import authenticate_and_capture_state
 from src.utils.browser_stealth import launch_stealth_browser, create_stealth_context
 from src.coverage.visual_baseline_registry import VisualBaselineRegistryManager
 from src.models.config import FrameworkConfig
@@ -54,7 +54,13 @@ class Executor:
         self.visual_registry_manager = visual_registry_manager
 
     async def execute(self, plan: TestPlan, baseline_dir: Path | None = None) -> RunResult:
-        """Execute a full test plan and return results."""
+        """Execute a full test plan and return results.
+
+        Each test runs in a fully isolated browser context. If auth is
+        configured, the session state (cookies + localStorage) is captured
+        once and injected into each test's context via Playwright's
+        storageState API — no repeated logins.
+        """
         started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ")
         start_time = time.time()
         total_tests = len(plan.test_cases)
@@ -76,15 +82,23 @@ class Executor:
         async with async_playwright() as p:
             logger.debug("Launching stealth Chromium for test execution...")
             browser = await launch_stealth_browser(p)
-            context = await create_stealth_context(
-                browser,
-                viewport={"width": 1280, "height": 720},
-                user_agent=self.config.crawl.user_agent,
-            )
 
+            # Capture auth state once — will be injected into per-test contexts
+            auth_storage_state: dict | None = None
             if self.config.auth:
-                logger.info("Authenticating before test execution...")
-                await self._authenticate(context)
+                logger.info("Authenticating to capture session state...")
+                auth_result, auth_storage_state = await authenticate_and_capture_state(
+                    browser,
+                    self.config.auth,
+                    ai_client=self.ai_client,
+                    viewport={"width": 1280, "height": 720},
+                    user_agent=self.config.crawl.user_agent,
+                )
+                if auth_result.success:
+                    method = auth_result.auth_flow.detection_method if auth_result.auth_flow else "unknown"
+                    logger.info("Auth state captured successfully (method=%s)", method)
+                else:
+                    logger.error("Initial auth failed: %s", auth_result.error)
 
             for group_key, tests in page_groups.items():
                 if remaining_time <= 0:
@@ -116,19 +130,42 @@ class Executor:
                     test_counter += 1
                     logger.info("Running test [%d/%d]: %s (%s)",
                                 test_counter, total_tests, tc.name, tc.category)
-                    logger.debug("  Test ID: %s | Page: %s | Timeout: %ds",
-                                 tc.test_id, tc.target_page_id, tc.timeout_seconds)
-                    result = await self._run_test(context, tc, baseline_dir)
-                    test_results.append(result)
-                    logger.info("[%s] %s: %s (%.1fs)",
-                                result.result.upper(), tc.test_id, tc.name,
-                                result.duration_seconds or 0)
+                    logger.debug("  Test ID: %s | Page: %s | Timeout: %ds | requires_auth: %s",
+                                 tc.test_id, tc.target_page_id, tc.timeout_seconds,
+                                 tc.requires_auth)
 
-                    # Re-authenticate if the test invalidated the session (e.g. logout)
-                    if self.config.auth and self._session_invalidated(result):
-                        logger.info("Session invalidated by %s, re-authenticating...",
-                                    tc.test_id)
-                        await self._authenticate(context)
+                    # Create an isolated context for this test
+                    storage = auth_storage_state if (tc.requires_auth and self.config.auth) else None
+                    context = await create_stealth_context(
+                        browser,
+                        viewport={"width": 1280, "height": 720},
+                        user_agent=self.config.crawl.user_agent,
+                        storage_state=storage,
+                    )
+                    try:
+                        result = await self._run_test(context, tc, baseline_dir)
+                        test_results.append(result)
+                        logger.info("[%s] %s: %s (%.1fs)",
+                                    result.result.upper(), tc.test_id, tc.name,
+                                    result.duration_seconds or 0)
+
+                        # If the test invalidated the session (e.g. logout),
+                        # re-capture auth state so subsequent tests get valid cookies.
+                        if self.config.auth and self._session_invalidated(result):
+                            logger.info("Session invalidated by %s, re-capturing auth state...",
+                                        tc.test_id)
+                            auth_result, auth_storage_state = await authenticate_and_capture_state(
+                                browser,
+                                self.config.auth,
+                                ai_client=self.ai_client,
+                                viewport={"width": 1280, "height": 720},
+                                user_agent=self.config.crawl.user_agent,
+                            )
+                            if not auth_result.success:
+                                logger.error("Re-auth after session invalidation failed: %s",
+                                             auth_result.error)
+                    finally:
+                        await context.close()
 
             await browser.close()
 
@@ -157,17 +194,6 @@ class Executor:
         )
         return run_result
 
-    async def _authenticate(self, context) -> None:
-        auth = self.config.auth
-        if not auth:
-            return
-        result = await perform_smart_auth(context, auth, ai_client=self.ai_client)
-        if result.success:
-            method = result.auth_flow.detection_method if result.auth_flow else "unknown"
-            logger.info("Executor auth successful (method=%s)", method)
-        else:
-            logger.error("Executor auth failed: %s", result.error)
-
     @staticmethod
     def _session_invalidated(result: TestResult) -> bool:
         """Check if a test likely invalidated the auth session (e.g. logout)."""
@@ -190,6 +216,9 @@ class Executor:
         test_start = time.time()
         evidence_dir = self.run_dir / "evidence" / tc.test_id
         evidence_dir.mkdir(parents=True, exist_ok=True)
+
+        # Per-action selector timeout from config (distinct from overall test timeout)
+        selector_timeout_ms = self.config.selector_timeout_seconds * 1000
 
         # Resolve dynamic variables (e.g. {{$timestamp}}) once for the entire
         # test case so preconditions and steps share the same values.
@@ -221,7 +250,7 @@ class Executor:
                              action.description or action.selector or "")
                 step_screenshot = None
                 try:
-                    await run_action(page, action, timeout=tc.timeout_seconds * 1000)
+                    await run_action(page, action, timeout=selector_timeout_ms)
                     step_screenshot = await collector.take_screenshot(page, f"precond_{i}")
                     if step_screenshot:
                         screenshots.append(step_screenshot)
@@ -262,7 +291,7 @@ class Executor:
                              action.description or action.selector or "")
                 step_screenshot = None
                 try:
-                    await run_action(page, action, timeout=tc.timeout_seconds * 1000)
+                    await run_action(page, action, timeout=selector_timeout_ms)
                     # Skip step screenshots for visual tests — viewport shots are
                     # captured by the assertion checker and are more useful.
                     if not is_visual:
@@ -305,7 +334,7 @@ class Executor:
                             retry_action = action.model_copy()
                             retry_action.selector = fb_response.new_selector
                             try:
-                                await run_action(page, retry_action, timeout=tc.timeout_seconds * 1000)
+                                await run_action(page, retry_action, timeout=selector_timeout_ms, smart_resolve=False)
                                 retry_screenshot = await collector.take_screenshot(page, f"step_{step_idx}_retry")
                                 if retry_screenshot:
                                     screenshots.append(retry_screenshot)
@@ -320,7 +349,7 @@ class Executor:
                                 pass
                         elif fb_response.decision == "adapt" and fb_response.new_action:
                             try:
-                                await run_action(page, fb_response.new_action, timeout=tc.timeout_seconds * 1000)
+                                await run_action(page, fb_response.new_action, timeout=selector_timeout_ms, smart_resolve=False)
                                 adapt_screenshot = await collector.take_screenshot(page, f"step_{step_idx}_adapt")
                                 if adapt_screenshot:
                                     screenshots.append(adapt_screenshot)

@@ -9,7 +9,11 @@ from src.models.test_plan import Action
 
 @pytest.mark.asyncio
 class TestRunAction:
-    """Tests for run_action function."""
+    """Tests for run_action function.
+
+    Most tests use smart_resolve=False to isolate the action execution
+    logic from the selector resolver. Smart resolution is tested separately.
+    """
 
     async def test_navigate_action(self, mock_page):
         """Test navigate action."""
@@ -43,16 +47,16 @@ class TestRunAction:
             selector="button#submit",
         )
 
-        await run_action(mock_page, action)
+        await run_action(mock_page, action, smart_resolve=False)
 
-        mock_page.click.assert_called_once_with("button#submit", timeout=30000)
+        mock_page.click.assert_called_once_with("button#submit", timeout=10000)
 
     async def test_click_action_requires_selector(self, mock_page):
         """Test click action raises error without selector."""
         action = Action(action_type="click")
 
         with pytest.raises(ValueError, match="selector"):
-            await run_action(mock_page, action)
+            await run_action(mock_page, action, smart_resolve=False)
 
     async def test_fill_action(self, mock_page):
         """Test fill action."""
@@ -62,12 +66,12 @@ class TestRunAction:
             value="test@example.com",
         )
 
-        await run_action(mock_page, action)
+        await run_action(mock_page, action, smart_resolve=False)
 
         mock_page.fill.assert_called_once_with(
             "input[name='email']",
             "test@example.com",
-            timeout=30000
+            timeout=10000
         )
 
     async def test_fill_action_with_empty_value(self, mock_page):
@@ -78,16 +82,16 @@ class TestRunAction:
             value=None,
         )
 
-        await run_action(mock_page, action)
+        await run_action(mock_page, action, smart_resolve=False)
 
-        mock_page.fill.assert_called_once_with("input", "", timeout=30000)
+        mock_page.fill.assert_called_once_with("input", "", timeout=10000)
 
     async def test_fill_action_requires_selector(self, mock_page):
         """Test fill action raises error without selector."""
         action = Action(action_type="fill", value="text")
 
         with pytest.raises(ValueError, match="selector"):
-            await run_action(mock_page, action)
+            await run_action(mock_page, action, smart_resolve=False)
 
     async def test_select_action(self, mock_page):
         """Test select dropdown action."""
@@ -97,12 +101,12 @@ class TestRunAction:
             value="USA",
         )
 
-        await run_action(mock_page, action)
+        await run_action(mock_page, action, smart_resolve=False)
 
         mock_page.select_option.assert_called_once_with(
             "select[name='country']",
             "USA",
-            timeout=30000
+            timeout=10000
         )
 
     async def test_select_action_requires_selector(self, mock_page):
@@ -110,7 +114,7 @@ class TestRunAction:
         action = Action(action_type="select", value="option")
 
         with pytest.raises(ValueError, match="selector"):
-            await run_action(mock_page, action)
+            await run_action(mock_page, action, smart_resolve=False)
 
     async def test_hover_action(self, mock_page):
         """Test hover action."""
@@ -119,16 +123,16 @@ class TestRunAction:
             selector=".menu-item",
         )
 
-        await run_action(mock_page, action)
+        await run_action(mock_page, action, smart_resolve=False)
 
-        mock_page.hover.assert_called_once_with(".menu-item", timeout=30000)
+        mock_page.hover.assert_called_once_with(".menu-item", timeout=10000)
 
     async def test_hover_action_requires_selector(self, mock_page):
         """Test hover action raises error without selector."""
         action = Action(action_type="hover")
 
         with pytest.raises(ValueError, match="selector"):
-            await run_action(mock_page, action)
+            await run_action(mock_page, action, smart_resolve=False)
 
     async def test_scroll_to_position(self, mock_page):
         """Test scroll to specific position."""
@@ -175,11 +179,11 @@ class TestRunAction:
             selector=".content",
         )
 
-        await run_action(mock_page, action)
+        await run_action(mock_page, action, smart_resolve=False)
 
         mock_page.wait_for_selector.assert_called_once_with(
             ".content",
-            timeout=30000
+            timeout=10000
         )
 
     async def test_wait_for_timeout(self, mock_page):
@@ -244,7 +248,7 @@ class TestRunAction:
             selector="button",
         )
 
-        await run_action(mock_page, action, timeout=5000)
+        await run_action(mock_page, action, timeout=5000, smart_resolve=False)
 
         call_args = mock_page.click.call_args
         assert call_args.kwargs["timeout"] == 5000
@@ -275,3 +279,20 @@ class TestRunAction:
         await run_action(mock_page, action)
 
         mock_page.goto.assert_called_once()
+
+    async def test_smart_resolve_uses_resolved_selector(self, mock_page):
+        """Test that smart_resolve=True resolves the selector before acting."""
+        action = Action(
+            action_type="click",
+            selector="button#submit",
+        )
+
+        # wait_for_selector returns a truthy mock (element found)
+        mock_page.wait_for_selector.return_value = AsyncMock()
+
+        await run_action(mock_page, action, timeout=10000, smart_resolve=True)
+
+        # Resolver should have called wait_for_selector to find the element
+        mock_page.wait_for_selector.assert_called()
+        # Then click should use the resolved (original) selector
+        mock_page.click.assert_called_once_with("button#submit", timeout=10000)
