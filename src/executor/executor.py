@@ -217,6 +217,9 @@ class Executor:
         evidence_dir = self.run_dir / "evidence" / tc.test_id
         evidence_dir.mkdir(parents=True, exist_ok=True)
 
+        # Per-action selector timeout from config (distinct from overall test timeout)
+        selector_timeout_ms = self.config.selector_timeout_seconds * 1000
+
         # Resolve dynamic variables (e.g. {{$timestamp}}) once for the entire
         # test case so preconditions and steps share the same values.
         resolve_dynamic_vars_for_test_case(tc.preconditions + tc.steps)
@@ -247,7 +250,7 @@ class Executor:
                              action.description or action.selector or "")
                 step_screenshot = None
                 try:
-                    await run_action(page, action, timeout=tc.timeout_seconds * 1000)
+                    await run_action(page, action, timeout=selector_timeout_ms)
                     step_screenshot = await collector.take_screenshot(page, f"precond_{i}")
                     if step_screenshot:
                         screenshots.append(step_screenshot)
@@ -288,7 +291,7 @@ class Executor:
                              action.description or action.selector or "")
                 step_screenshot = None
                 try:
-                    await run_action(page, action, timeout=tc.timeout_seconds * 1000)
+                    await run_action(page, action, timeout=selector_timeout_ms)
                     # Skip step screenshots for visual tests — viewport shots are
                     # captured by the assertion checker and are more useful.
                     if not is_visual:
@@ -331,7 +334,7 @@ class Executor:
                             retry_action = action.model_copy()
                             retry_action.selector = fb_response.new_selector
                             try:
-                                await run_action(page, retry_action, timeout=tc.timeout_seconds * 1000)
+                                await run_action(page, retry_action, timeout=selector_timeout_ms, smart_resolve=False)
                                 retry_screenshot = await collector.take_screenshot(page, f"step_{step_idx}_retry")
                                 if retry_screenshot:
                                     screenshots.append(retry_screenshot)
@@ -346,7 +349,7 @@ class Executor:
                                 pass
                         elif fb_response.decision == "adapt" and fb_response.new_action:
                             try:
-                                await run_action(page, fb_response.new_action, timeout=tc.timeout_seconds * 1000)
+                                await run_action(page, fb_response.new_action, timeout=selector_timeout_ms, smart_resolve=False)
                                 adapt_screenshot = await collector.take_screenshot(page, f"step_{step_idx}_adapt")
                                 if adapt_screenshot:
                                     screenshots.append(adapt_screenshot)
