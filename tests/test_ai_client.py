@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
+import anthropic
 import pytest
 
 from src.ai.client import AIClient, set_debug_dir, _get_debug_dir
@@ -277,9 +278,10 @@ class TestAIClientErrorHandling:
             with pytest.raises(Exception, match="API Error"):
                 client.complete("system", "user")
 
+    @patch("time.sleep")
     @patch("anthropic.Anthropic")
-    def test_timeout_error_propagates(self, mock_anthropic_class):
-        """Test timeout errors are propagated."""
+    def test_timeout_error_propagates_after_retries(self, mock_anthropic_class, mock_sleep):
+        """Test timeout errors are propagated after exhausting retries."""
         import anthropic
 
         mock_client = Mock()
@@ -293,6 +295,170 @@ class TestAIClientErrorHandling:
 
             with pytest.raises(anthropic.APITimeoutError):
                 client.complete("system", "user")
+
+            # Should have retried MAX_RETRIES times (1 initial + 3 retries = 4 calls)
+            assert mock_client.messages.create.call_count == 1 + AIClient.MAX_RETRIES
+            assert mock_sleep.call_count == AIClient.MAX_RETRIES
+
+
+class TestAIClientRetry:
+    """Tests for API retry with exponential backoff."""
+
+    def _make_success_response(self):
+        mock_content = Mock()
+        mock_content.text = "OK"
+        mock_response = Mock()
+        mock_response.content = [mock_content]
+        mock_response.stop_reason = "end_turn"
+        return mock_response
+
+    def test_is_retryable_overloaded(self):
+        """529 (overloaded) errors are retryable."""
+        error = anthropic.APIStatusError(
+            message="overloaded", response=Mock(status_code=529), body=None,
+        )
+        assert AIClient._is_retryable(error) is True
+
+    def test_is_retryable_rate_limit(self):
+        """429 (rate limit) errors are retryable."""
+        error = anthropic.APIStatusError(
+            message="rate limited", response=Mock(status_code=429), body=None,
+        )
+        assert AIClient._is_retryable(error) is True
+
+    def test_is_retryable_server_errors(self):
+        """5xx server errors are retryable."""
+        for code in (500, 502, 503, 504):
+            error = anthropic.APIStatusError(
+                message="server error", response=Mock(status_code=code), body=None,
+            )
+            assert AIClient._is_retryable(error) is True, f"Expected {code} to be retryable"
+
+    def test_is_retryable_connection_error(self):
+        """Connection errors are retryable."""
+        error = anthropic.APIConnectionError(request=Mock())
+        assert AIClient._is_retryable(error) is True
+
+    def test_is_not_retryable_auth_error(self):
+        """401 (auth) errors are NOT retryable."""
+        error = anthropic.APIStatusError(
+            message="unauthorized", response=Mock(status_code=401), body=None,
+        )
+        assert AIClient._is_retryable(error) is False
+
+    def test_is_not_retryable_bad_request(self):
+        """400 (bad request) errors are NOT retryable."""
+        error = anthropic.APIStatusError(
+            message="bad request", response=Mock(status_code=400), body=None,
+        )
+        assert AIClient._is_retryable(error) is False
+
+    @patch("time.sleep")
+    @patch("anthropic.Anthropic")
+    def test_retry_succeeds_after_transient_failure(self, mock_anthropic_class, mock_sleep):
+        """Test successful recovery after a transient 529 error."""
+        success = self._make_success_response()
+        overloaded = anthropic.APIStatusError(
+            message="overloaded", response=Mock(status_code=529), body=None,
+        )
+
+        mock_client = Mock()
+        mock_client.messages.create.side_effect = [overloaded, success]
+        mock_anthropic_class.return_value = mock_client
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            client = AIClient()
+            with patch.object(client, '_save_exchange_log'):
+                result = client.complete("system", "user")
+
+        assert result == "OK"
+        assert mock_client.messages.create.call_count == 2
+        assert mock_sleep.call_count == 1
+
+    @patch("time.sleep")
+    @patch("anthropic.Anthropic")
+    def test_retry_gives_up_after_max_retries(self, mock_anthropic_class, mock_sleep):
+        """Test that retries are exhausted and error is raised."""
+        overloaded = anthropic.APIStatusError(
+            message="overloaded", response=Mock(status_code=529), body=None,
+        )
+
+        mock_client = Mock()
+        mock_client.messages.create.side_effect = overloaded
+        mock_anthropic_class.return_value = mock_client
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            client = AIClient()
+            with pytest.raises(anthropic.APIStatusError):
+                client.complete("system", "user")
+
+        assert mock_client.messages.create.call_count == 1 + AIClient.MAX_RETRIES
+        assert mock_sleep.call_count == AIClient.MAX_RETRIES
+
+    @patch("time.sleep")
+    @patch("anthropic.Anthropic")
+    def test_non_retryable_error_fails_immediately(self, mock_anthropic_class, mock_sleep):
+        """Test that non-retryable errors are raised without retry."""
+        auth_error = anthropic.APIStatusError(
+            message="unauthorized", response=Mock(status_code=401), body=None,
+        )
+
+        mock_client = Mock()
+        mock_client.messages.create.side_effect = auth_error
+        mock_anthropic_class.return_value = mock_client
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            client = AIClient()
+            with pytest.raises(anthropic.APIStatusError):
+                client.complete("system", "user")
+
+        assert mock_client.messages.create.call_count == 1
+        assert mock_sleep.call_count == 0
+
+    @patch("time.sleep")
+    @patch("anthropic.Anthropic")
+    def test_backoff_delay_increases_exponentially(self, mock_anthropic_class, mock_sleep):
+        """Test that retry delays follow exponential backoff."""
+        overloaded = anthropic.APIStatusError(
+            message="overloaded", response=Mock(status_code=529), body=None,
+        )
+
+        mock_client = Mock()
+        mock_client.messages.create.side_effect = overloaded
+        mock_anthropic_class.return_value = mock_client
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            client = AIClient()
+            with patch("random.uniform", return_value=0.5):
+                with pytest.raises(anthropic.APIStatusError):
+                    client.complete("system", "user")
+
+        # Delays: 1*2^0+0.5=1.5, 1*2^1+0.5=2.5, 1*2^2+0.5=4.5
+        delays = [call.args[0] for call in mock_sleep.call_args_list]
+        assert delays == [1.5, 2.5, 4.5]
+
+    @patch("time.sleep")
+    @patch("anthropic.Anthropic")
+    def test_retry_works_for_complete_with_image(self, mock_anthropic_class, mock_sleep):
+        """Test retry logic also applies to complete_with_image."""
+        success = self._make_success_response()
+        overloaded = anthropic.APIStatusError(
+            message="overloaded", response=Mock(status_code=529), body=None,
+        )
+
+        mock_client = Mock()
+        mock_client.messages.create.side_effect = [overloaded, success]
+        mock_anthropic_class.return_value = mock_client
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            client = AIClient()
+            with patch.object(client, '_save_exchange_log'):
+                result = client.complete_with_image(
+                    "system", "describe this", image_base64="abc123"
+                )
+
+        assert result == "OK"
+        assert mock_client.messages.create.call_count == 2
 
 
 @pytest.mark.unit
