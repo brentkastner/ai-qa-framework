@@ -66,8 +66,14 @@ async def create_stealth_context(
     browser: Browser,
     viewport: dict,
     user_agent: Optional[str] = None,
+    storage_state: Optional[dict | str] = None,
 ) -> BrowserContext:
-    """Create a browser context with stealth patches applied."""
+    """Create a browser context with stealth patches applied.
+
+    Args:
+        storage_state: Optional Playwright storage state (cookies + localStorage)
+            to seed the context with. Accepts a dict or a path to a JSON file.
+    """
     context = await browser.new_context(
         viewport=viewport,
         user_agent=user_agent or DEFAULT_USER_AGENT,
@@ -76,6 +82,7 @@ async def create_stealth_context(
         extra_http_headers={
             "Accept-Language": "en-US,en;q=0.9",
         },
+        storage_state=storage_state,
     )
     await context.add_init_script(_STEALTH_INIT_SCRIPT)
     return context

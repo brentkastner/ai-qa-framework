@@ -27,6 +27,7 @@ REQUIRED RESPONSE FORMAT (plain JSON, no markdown fences):
       "priority": 1-5,
       "target_page_id": "string (page_id from Site Model)",
       "coverage_signature": "string (abstract description for registry matching)",
+      "requires_auth": true,
       "preconditions": [
         {
           "action_type": "navigate | click | fill | select | hover | scroll | wait | screenshot | keyboard",
@@ -69,8 +70,11 @@ REQUIRED RESPONSE FORMAT (plain JSON, no markdown fences):
    - Use ai_evaluate when the expected outcome is ambiguous and best described as an intent (e.g., "user appears to be logged in", "form submission was accepted", "search results are displayed"). Set expected_value to a clear natural language intent description. The AI will judge the actual page state at runtime.
    - NEVER guess what text a site will display after an action. If you cannot determine the exact text from the site model, use element_visible, url_matches, or ai_evaluate instead.
    - For page load verification: prefer `page_loaded` (verifies page is not blank, optionally checks for a key element) or `page_title_contains` with a short keyword (e.g., "Products" not "Products - My Store | Home"). AVOID using `text_contains` or `text_equals` with selector "title" — page titles are dynamic and frequently include CMS-appended suffixes, separators, or A/B test variants that break exact matches. Use `url_matches` or `page_loaded` for reliable page load checks.
-9. **Auth-aware tests:** Pages in the site model may have an `auth_required` field.
-   - If the site model has `"has_auth": true`, authentication is configured. The test execution framework handles authentication automatically via a shared browser session, so you do NOT need to add login steps as preconditions for tests on auth-protected pages. However, if you want to explicitly test the login flow itself (e.g., verifying form submission, error handling, or that the login page works correctly), use these exact placeholder tokens in Action `value` fields:
+9. **Auth-aware tests:** Each test runs in a fully isolated browser context with no shared state between tests.
+   - If the site model has `"has_auth": true`, authentication is configured. The framework captures an authenticated session once and injects it (cookies + localStorage) into each test's isolated browser context automatically. You do NOT need to add login steps as preconditions for tests on auth-protected pages.
+   - Set `"requires_auth": true` (the default) for tests that need an authenticated session. The framework will inject saved auth state into the test's context.
+   - Set `"requires_auth": false` for tests that deliberately test unauthenticated behavior (e.g., verifying the login page renders correctly, testing that unauthenticated users are redirected to login, or testing access-denied states). These tests get a completely bare browser context with no cookies or session state.
+   - If you want to explicitly test the login flow itself (e.g., verifying form submission, error handling), set `"requires_auth": false` and use these exact placeholder tokens in Action `value` fields:
      - `{{auth_login_url}}` — the login page URL (use in navigate action values)
      - `{{auth_username}}` — the test username/email (use in fill action values for username/email fields)
      - `{{auth_password}}` — the test password (use in fill action values for password fields)

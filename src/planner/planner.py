@@ -172,6 +172,7 @@ class Planner:
                     priority=tc_data.get("priority", 3),
                     target_page_id=tc_data.get("target_page_id", ""),
                     coverage_signature=tc_data.get("coverage_signature", ""),
+                    requires_auth=tc_data.get("requires_auth", True),
                     preconditions=preconditions,
                     steps=steps,
                     assertions=assertions,
