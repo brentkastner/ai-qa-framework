@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 import re
 import time
 import traceback
@@ -38,6 +39,9 @@ def _get_debug_dir() -> Path:
 class AIClient:
     """Wrapper around the Anthropic Claude API."""
 
+    MAX_RETRIES = 3
+    BASE_DELAY = 1.0  # seconds
+
     def __init__(self, model: str = "claude-opus-4-6", max_tokens: int = 32000):
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
@@ -54,6 +58,36 @@ class AIClient:
     @property
     def call_count(self) -> int:
         return self._call_count
+
+    @staticmethod
+    def _is_retryable(error: Exception) -> bool:
+        """Check if an API error is transient and worth retrying."""
+        if isinstance(error, anthropic.APIConnectionError):
+            return True
+        if isinstance(error, anthropic.APIStatusError):
+            return error.status_code in (429, 529, 500, 502, 503, 504)
+        return False
+
+    def _call_with_retry(self, api_call, call_label: str):
+        """Execute an API call with exponential backoff on transient errors.
+
+        Returns the raw API response object.
+        """
+        last_error = None
+        for attempt in range(1 + self.MAX_RETRIES):
+            try:
+                return api_call()
+            except anthropic.APIError as e:
+                last_error = e
+                if not self._is_retryable(e) or attempt == self.MAX_RETRIES:
+                    raise
+                delay = self.BASE_DELAY * (2 ** attempt) + random.uniform(0, 1)
+                logger.warning(
+                    "Retryable API error on %s (attempt %d/%d): %s — retrying in %.1fs",
+                    call_label, attempt + 1, self.MAX_RETRIES + 1,
+                    e, delay,
+                )
+                time.sleep(delay)
 
     def complete(
         self,
@@ -74,12 +108,15 @@ class AIClient:
 
         try:
             call_start = time.time()
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=tokens,
-                temperature=temperature,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_message}],
+            response = self._call_with_retry(
+                lambda: self.client.messages.create(
+                    model=self.model,
+                    max_tokens=tokens,
+                    temperature=temperature,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": user_message}],
+                ),
+                call_label=f"complete (call #{self._call_count})",
             )
             call_duration = time.time() - call_start
             text = response.content[0].text
@@ -144,26 +181,29 @@ class AIClient:
 
         try:
             call_start = time.time()
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=max_tokens or self.max_tokens,
-                system=system_prompt,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": media_type,
-                                    "data": image_base64,
+            response = self._call_with_retry(
+                lambda: self.client.messages.create(
+                    model=self.model,
+                    max_tokens=max_tokens or self.max_tokens,
+                    system=system_prompt,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": media_type,
+                                        "data": image_base64,
+                                    },
                                 },
-                            },
-                            {"type": "text", "text": user_message},
-                        ],
-                    }
-                ],
+                                {"type": "text", "text": user_message},
+                            ],
+                        }
+                    ],
+                ),
+                call_label=f"complete_with_image (call #{self._call_count})",
             )
             call_duration = time.time() - call_start
             text = response.content[0].text
