@@ -107,7 +107,23 @@ class FrameworkConfig(BaseModel):
     # Reporting
     report_formats: list[str] = Field(default_factory=lambda: ["html", "json"])
     report_output_dir: str = "./qa-reports"
-    capture_video: bool = False
+    capture_video: str = "on_failure"
+
+    @field_validator("capture_video", mode="before")
+    @classmethod
+    def normalize_capture_video(cls, v: str | bool) -> str:
+        """Accept bool for backward compat; normalize to string enum."""
+        if isinstance(v, bool):
+            return "on_failure" if v else "off"
+        if isinstance(v, str):
+            v_lower = v.lower().strip()
+            valid = {"off", "on_failure", "always"}
+            if v_lower not in valid:
+                raise ValueError(
+                    f"capture_video must be one of {valid}, got '{v}'"
+                )
+            return v_lower
+        raise ValueError(f"capture_video must be str or bool, got {type(v).__name__}")
 
     # Scope
     include_url_patterns: list[str] = Field(default_factory=list)

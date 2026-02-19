@@ -62,7 +62,7 @@
     "json"
   ],
   "report_output_dir": "./qa-reports",
-  "capture_video": false,
+  "capture_video": "on_failure",
   "include_url_patterns": [],
   "exclude_url_patterns": [],
   "hints": []

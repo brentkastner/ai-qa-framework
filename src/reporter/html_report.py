@@ -49,6 +49,7 @@ def _build_test_card(r: TestResult) -> str:
       <div class="test-header" style="border-left: 4px solid {border_color};" onclick="this.parentElement.classList.toggle('expanded')">
         <div class="test-header-left">
           <span class="badge {result_class}">{r.result.upper()}</span>
+          {'<span class="badge flaky">POTENTIALLY FLAKY</span>' if r.potentially_flaky else ''}
           <strong>{html.escape(r.test_name)}</strong>
           <span class="badge {r.category}">{r.category}</span>
           <span class="test-meta">P{r.priority} &middot; {r.duration_seconds:.1f}s &middot; {r.assertions_passed}/{r.assertions_total} assertions</span>
@@ -65,6 +66,12 @@ def _build_test_card(r: TestResult) -> str:
     # Failure reason (prominent)
     if r.failure_reason:
         card += f'<div class="failure-banner"><strong>Failure:</strong> {html.escape(r.failure_reason)}</div>'
+
+    # Flaky detection notice
+    if r.potentially_flaky:
+        card += ('<div class="flaky-banner"><strong>Potentially Flaky:</strong> '
+                 'This test failed initially but passed on a video re-run. '
+                 'The attached video shows the successful re-run.</div>')
 
     # --- Preconditions ---
     if r.precondition_results:
@@ -131,6 +138,18 @@ def _build_test_card(r: TestResult) -> str:
                   <div class="screenshot-label">{html.escape(label)}</div>
                 </div>'''
         card += '</div></div>'
+
+    # --- Video Recording ---
+    if r.evidence.video_path:
+        video_name = html.escape(Path(r.evidence.video_path).name)
+        video_abs = html.escape(str(Path(r.evidence.video_path).resolve()))
+        card += f'''<div class="section video-section"><h4>Video Recording</h4>
+          <video controls preload="metadata">
+            <source src="file:///{video_abs}" type="video/webm">
+            Your browser does not support the video tag.
+          </video>
+          <div class="screenshot-label">{video_name}</div>
+        </div>'''
 
     # --- Console Errors ---
     console_errors = [log for log in r.evidence.console_logs if "[error]" in log.lower()]
@@ -286,6 +305,11 @@ def generate_html_report(
   /* Fallback */
   .fallback-row {{ padding: 0.4rem 0; font-size: 0.85rem; border-bottom: 1px solid #f1f5f9; }}
   .fallback-row code {{ font-size: 0.8rem; background: #f1f5f9; padding: 0.1rem 0.3rem; border-radius: 3px; }}
+  /* Flaky */
+  .badge.flaky {{ background: #fef3c7; color: #92400e; border: 1px dashed #f59e0b; }}
+  .flaky-banner {{ background: #fefce8; border: 1px solid #fde68a; color: #92400e; border-radius: 6px; padding: 0.6rem 0.8rem; margin-bottom: 0.8rem; font-size: 0.88rem; }}
+  /* Video */
+  .video-section video {{ width: 100%; max-width: 640px; border-radius: 6px; border: 1px solid var(--border); }}
   /* Screenshots */
   .screenshots-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.6rem; }}
   .screenshot-item {{ text-align: center; }}

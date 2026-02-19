@@ -31,6 +31,7 @@ def _make_config(auth: AuthConfig | None = None, max_time: int = 1800) -> Framew
         ai_max_planning_tokens=32000,
         visual_diff_tolerance=0.15,
         report_output_dir="./test-reports",
+        capture_video="off",
     )
 
 
@@ -720,3 +721,302 @@ class TestParallelExecution:
         assert result.test_results[0].test_id == "tc_high"
         assert result.test_results[1].test_id == "tc_mid"
         assert result.test_results[2].test_id == "tc_low"
+
+
+class TestFindVideoFile:
+    """Tests for Executor._find_video_file static helper."""
+
+    def test_finds_webm_file(self, tmp_path):
+        video_dir = tmp_path / "video"
+        video_dir.mkdir()
+        webm = video_dir / "abc123.webm"
+        webm.write_bytes(b"fake video")
+
+        result = Executor._find_video_file(video_dir)
+        assert result == str(webm)
+
+    def test_returns_none_when_empty(self, tmp_path):
+        video_dir = tmp_path / "video"
+        video_dir.mkdir()
+
+        result = Executor._find_video_file(video_dir)
+        assert result is None
+
+    def test_returns_none_for_non_webm(self, tmp_path):
+        video_dir = tmp_path / "video"
+        video_dir.mkdir()
+        (video_dir / "screenshot.png").write_bytes(b"image")
+
+        result = Executor._find_video_file(video_dir)
+        assert result is None
+
+    def test_returns_none_for_missing_dir(self, tmp_path):
+        result = Executor._find_video_file(tmp_path / "nonexistent")
+        assert result is None
+
+
+class TestVideoRecording:
+    """Tests for video recording in all three capture_video modes."""
+
+    @pytest.mark.asyncio
+    async def test_off_mode_no_video(self, tmp_path):
+        """capture_video='off': no video dir passed, no video in result."""
+        mock_page = _make_mock_page()
+        mock_context = _make_mock_context(mock_page)
+
+        config = _make_config()
+        config.capture_video = "off"
+        executor = Executor(config, ai_client=None, runs_dir=tmp_path)
+        plan = _make_plan()
+
+        with patch(ASYNC_PW) as mock_pw_cls, \
+             patch(STEALTH_BROWSER, return_value=AsyncMock()), \
+             patch(STEALTH_CONTEXT, return_value=mock_context) as ctx_fn, \
+             patch("src.executor.executor.run_action", new_callable=AsyncMock), \
+             patch("src.executor.executor.check_assertion", new_callable=AsyncMock) as mock_assert, \
+             patch("src.executor.executor.resolve_dynamic_vars_for_test_case"):
+            mock_pw_cls.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
+            mock_pw_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_assert.return_value = Mock(passed=True, message="OK", screenshots=[])
+
+            result = await executor.execute(plan)
+
+        assert ctx_fn.call_count == 1
+        assert result.test_results[0].evidence.video_path is None
+        # Verify no record_video_dir was passed
+        call_kwargs = ctx_fn.call_args.kwargs
+        assert call_kwargs.get("record_video_dir") is None
+
+    @pytest.mark.asyncio
+    async def test_always_mode_records_video(self, tmp_path):
+        """capture_video='always': video dir passed to context, video path attached."""
+        mock_page = _make_mock_page()
+        mock_context = _make_mock_context(mock_page)
+
+        config = _make_config()
+        config.capture_video = "always"
+        executor = Executor(config, ai_client=None, runs_dir=tmp_path)
+        plan = _make_plan()
+
+        # Create the video file when context closes (simulating Playwright behavior)
+        async def create_video_on_close():
+            video_dir = executor.run_dir / "evidence" / "tc_001" / "video"
+            video_dir.mkdir(parents=True, exist_ok=True)
+            (video_dir / "recording.webm").write_bytes(b"fake video data")
+
+        mock_context.close = AsyncMock(side_effect=create_video_on_close)
+
+        with patch(ASYNC_PW) as mock_pw_cls, \
+             patch(STEALTH_BROWSER, return_value=AsyncMock()), \
+             patch(STEALTH_CONTEXT, return_value=mock_context) as ctx_fn, \
+             patch("src.executor.executor.run_action", new_callable=AsyncMock), \
+             patch("src.executor.executor.check_assertion", new_callable=AsyncMock) as mock_assert, \
+             patch("src.executor.executor.resolve_dynamic_vars_for_test_case"):
+            mock_pw_cls.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
+            mock_pw_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_assert.return_value = Mock(passed=True, message="OK", screenshots=[])
+
+            result = await executor.execute(plan)
+
+        # Context created once with record_video_dir
+        assert ctx_fn.call_count == 1
+        call_kwargs = ctx_fn.call_args.kwargs
+        assert call_kwargs["record_video_dir"] is not None
+        assert "video" in call_kwargs["record_video_dir"]
+
+        # Video path attached to evidence
+        tr = result.test_results[0]
+        assert tr.evidence.video_path is not None
+        assert tr.evidence.video_path.endswith(".webm")
+
+    @pytest.mark.asyncio
+    async def test_on_failure_skips_passing_test(self, tmp_path):
+        """capture_video='on_failure': passing test gets no re-run, no video."""
+        mock_page = _make_mock_page()
+        mock_context = _make_mock_context(mock_page)
+
+        config = _make_config()
+        config.capture_video = "on_failure"
+        executor = Executor(config, ai_client=None, runs_dir=tmp_path)
+        plan = _make_plan()
+
+        with patch(ASYNC_PW) as mock_pw_cls, \
+             patch(STEALTH_BROWSER, return_value=AsyncMock()), \
+             patch(STEALTH_CONTEXT, return_value=mock_context) as ctx_fn, \
+             patch("src.executor.executor.run_action", new_callable=AsyncMock), \
+             patch("src.executor.executor.check_assertion", new_callable=AsyncMock) as mock_assert, \
+             patch("src.executor.executor.resolve_dynamic_vars_for_test_case"):
+            mock_pw_cls.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
+            mock_pw_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_assert.return_value = Mock(passed=True, message="OK", screenshots=[])
+
+            result = await executor.execute(plan)
+
+        # Only one context created (no re-run for passing test)
+        assert ctx_fn.call_count == 1
+        assert result.test_results[0].evidence.video_path is None
+        assert result.test_results[0].potentially_flaky is False
+
+    @pytest.mark.asyncio
+    async def test_on_failure_reruns_failed_test(self, tmp_path):
+        """capture_video='on_failure': failed test gets re-run with video."""
+        mock_page = _make_mock_page()
+
+        config = _make_config()
+        config.capture_video = "on_failure"
+        executor = Executor(config, ai_client=None, runs_dir=tmp_path)
+        plan = _make_plan()
+
+        context_count = 0
+
+        def make_context(*args, **kwargs):
+            nonlocal context_count
+            context_count += 1
+            ctx = _make_mock_context()
+            if context_count == 2:
+                # Second context (video re-run): create video file on close
+                async def create_video():
+                    rerun_video_dir = executor.run_dir / "evidence" / "tc_001" / "video_rerun" / "video"
+                    rerun_video_dir.mkdir(parents=True, exist_ok=True)
+                    (rerun_video_dir / "failure.webm").write_bytes(b"video data")
+                ctx.close = AsyncMock(side_effect=create_video)
+            return ctx
+
+        with patch(ASYNC_PW) as mock_pw_cls, \
+             patch(STEALTH_BROWSER, return_value=AsyncMock()), \
+             patch(STEALTH_CONTEXT, side_effect=make_context) as ctx_fn, \
+             patch("src.executor.executor.run_action", new_callable=AsyncMock), \
+             patch("src.executor.executor.check_assertion", new_callable=AsyncMock) as mock_assert, \
+             patch("src.executor.executor.resolve_dynamic_vars_for_test_case"):
+            mock_pw_cls.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
+            mock_pw_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            # Both runs fail
+            mock_assert.return_value = Mock(passed=False, message="Element not found", screenshots=[])
+
+            result = await executor.execute(plan)
+
+        # Two contexts: original + video re-run
+        assert ctx_fn.call_count == 2
+        # Second call should have record_video_dir
+        second_call_kwargs = ctx_fn.call_args_list[1].kwargs
+        assert second_call_kwargs.get("record_video_dir") is not None
+
+        tr = result.test_results[0]
+        assert tr.result == "fail"
+        assert tr.evidence.video_path is not None
+        assert tr.evidence.video_path.endswith(".webm")
+        # Both runs failed — not flaky
+        assert tr.potentially_flaky is False
+
+    @pytest.mark.asyncio
+    async def test_on_failure_detects_flaky(self, tmp_path):
+        """capture_video='on_failure': original fails, re-run passes → flaky."""
+        config = _make_config()
+        config.capture_video = "on_failure"
+        executor = Executor(config, ai_client=None, runs_dir=tmp_path)
+        plan = _make_plan()
+
+        context_count = 0
+
+        def make_context(*args, **kwargs):
+            nonlocal context_count
+            context_count += 1
+            ctx = _make_mock_context()
+            if context_count == 2:
+                async def create_video():
+                    rerun_video_dir = executor.run_dir / "evidence" / "tc_001" / "video_rerun" / "video"
+                    rerun_video_dir.mkdir(parents=True, exist_ok=True)
+                    (rerun_video_dir / "flaky.webm").write_bytes(b"video data")
+                ctx.close = AsyncMock(side_effect=create_video)
+            return ctx
+
+        assertion_call_count = 0
+
+        async def alternating_assertion(page, assertion, *args, **kwargs):
+            nonlocal assertion_call_count
+            assertion_call_count += 1
+            # First call (original run) fails, second call (re-run) passes
+            if assertion_call_count == 1:
+                return Mock(passed=False, message="Element not found", screenshots=[])
+            return Mock(passed=True, message="OK", screenshots=[])
+
+        with patch(ASYNC_PW) as mock_pw_cls, \
+             patch(STEALTH_BROWSER, return_value=AsyncMock()), \
+             patch(STEALTH_CONTEXT, side_effect=make_context), \
+             patch("src.executor.executor.run_action", new_callable=AsyncMock), \
+             patch("src.executor.executor.check_assertion", side_effect=alternating_assertion), \
+             patch("src.executor.executor.resolve_dynamic_vars_for_test_case"):
+            mock_pw_cls.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
+            mock_pw_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await executor.execute(plan)
+
+        tr = result.test_results[0]
+        assert tr.result == "fail"  # Original result preserved
+        assert tr.potentially_flaky is True
+        assert tr.evidence.video_path is not None
+
+    @pytest.mark.asyncio
+    async def test_on_failure_respects_time_limit(self, tmp_path):
+        """capture_video='on_failure': re-run skipped when time limit exhausted."""
+        config = _make_config(max_time=0)
+        config.capture_video = "on_failure"
+        executor = Executor(config, ai_client=None, runs_dir=tmp_path)
+        plan = _make_plan()
+
+        with patch(ASYNC_PW) as mock_pw_cls, \
+             patch(STEALTH_BROWSER, return_value=AsyncMock()), \
+             patch(STEALTH_CONTEXT, return_value=_make_mock_context()) as ctx_fn, \
+             patch("src.executor.executor.run_action", new_callable=AsyncMock), \
+             patch("src.executor.executor.check_assertion", new_callable=AsyncMock) as mock_assert, \
+             patch("src.executor.executor.resolve_dynamic_vars_for_test_case"):
+            mock_pw_cls.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
+            mock_pw_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_assert.return_value = Mock(passed=False, message="Fail", screenshots=[])
+
+            result = await executor.execute(plan)
+
+        # With max_time=0, tests may be skipped entirely or re-run skipped
+        # Either way, no extra context for video re-run
+        tr = result.test_results[0]
+        assert tr.evidence.video_path is None
+
+    @pytest.mark.asyncio
+    async def test_on_failure_reruns_error_test(self, tmp_path):
+        """capture_video='on_failure': 'error' results also trigger re-run."""
+        config = _make_config()
+        config.capture_video = "on_failure"
+        executor = Executor(config, ai_client=None, runs_dir=tmp_path)
+        plan = _make_plan()
+
+        context_count = 0
+
+        def make_context(*args, **kwargs):
+            nonlocal context_count
+            context_count += 1
+            ctx = _make_mock_context()
+            if context_count == 2:
+                async def create_video():
+                    rerun_video_dir = executor.run_dir / "evidence" / "tc_001" / "video_rerun" / "video"
+                    rerun_video_dir.mkdir(parents=True, exist_ok=True)
+                    (rerun_video_dir / "error.webm").write_bytes(b"video data")
+                ctx.close = AsyncMock(side_effect=create_video)
+            return ctx
+
+        with patch(ASYNC_PW) as mock_pw_cls, \
+             patch(STEALTH_BROWSER, return_value=AsyncMock()), \
+             patch(STEALTH_CONTEXT, side_effect=make_context) as ctx_fn, \
+             patch("src.executor.executor.run_action", new_callable=AsyncMock), \
+             patch("src.executor.executor.check_assertion", new_callable=AsyncMock,
+                   side_effect=RuntimeError("Crash")), \
+             patch("src.executor.executor.resolve_dynamic_vars_for_test_case"):
+            mock_pw_cls.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
+            mock_pw_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await executor.execute(plan)
+
+        # Error triggers re-run
+        assert ctx_fn.call_count == 2
+        tr = result.test_results[0]
+        assert tr.result == "error"
+        assert tr.evidence.video_path is not None

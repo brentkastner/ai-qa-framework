@@ -165,7 +165,7 @@ class TestFrameworkConfig:
         assert config.security_max_probe_depth == 2
         assert config.report_formats == ["html", "json"]
         assert config.report_output_dir == "./qa-reports"
-        assert config.capture_video is False
+        assert config.capture_video == "on_failure"
 
     def test_custom_categories(self):
         """Test FrameworkConfig with custom categories."""
@@ -302,3 +302,50 @@ class TestFrameworkConfigFileOperations:
         assert loaded.max_tests_per_run == original.max_tests_per_run
         assert loaded.visual_diff_tolerance == original.visual_diff_tolerance
         assert loaded.hints == original.hints
+
+
+class TestCaptureVideoConfig:
+    """Tests for capture_video field validation and backward compatibility."""
+
+    def test_default_is_on_failure(self):
+        """Default capture_video is 'on_failure'."""
+        config = FrameworkConfig(target_url="https://example.com")
+        assert config.capture_video == "on_failure"
+
+    def test_accepts_off(self):
+        config = FrameworkConfig(target_url="https://example.com", capture_video="off")
+        assert config.capture_video == "off"
+
+    def test_accepts_on_failure(self):
+        config = FrameworkConfig(target_url="https://example.com", capture_video="on_failure")
+        assert config.capture_video == "on_failure"
+
+    def test_accepts_always(self):
+        config = FrameworkConfig(target_url="https://example.com", capture_video="always")
+        assert config.capture_video == "always"
+
+    def test_case_insensitive(self):
+        config = FrameworkConfig(target_url="https://example.com", capture_video="ON_FAILURE")
+        assert config.capture_video == "on_failure"
+
+    def test_bool_false_maps_to_off(self):
+        """Backward compat: false → 'off'."""
+        config = FrameworkConfig(target_url="https://example.com", capture_video=False)
+        assert config.capture_video == "off"
+
+    def test_bool_true_maps_to_on_failure(self):
+        """Backward compat: true → 'on_failure'."""
+        config = FrameworkConfig(target_url="https://example.com", capture_video=True)
+        assert config.capture_video == "on_failure"
+
+    def test_invalid_string_raises(self):
+        with pytest.raises(ValidationError, match="capture_video"):
+            FrameworkConfig(target_url="https://example.com", capture_video="invalid")
+
+    def test_round_trip_preserves_value(self, tmp_path):
+        """Save/load cycle preserves capture_video string value."""
+        config = FrameworkConfig(target_url="https://example.com", capture_video="always")
+        path = tmp_path / "config.json"
+        config.save(path)
+        loaded = FrameworkConfig.load(path)
+        assert loaded.capture_video == "always"

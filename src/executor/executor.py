@@ -115,11 +115,24 @@ class Executor:
                                  tc.requires_auth)
 
                     storage = auth_state["storage"] if (tc.requires_auth and self.config.auth) else None
+                    capture_mode = self.config.capture_video
+
+                    # For "always" mode, prepare video dir before context creation
+                    video_dir: Path | None = None
+                    record_video_dir_arg: str | None = None
+                    if capture_mode == "always":
+                        evidence_dir = self.run_dir / "evidence" / tc.test_id
+                        evidence_dir.mkdir(parents=True, exist_ok=True)
+                        video_dir = evidence_dir / "video"
+                        video_dir.mkdir(parents=True, exist_ok=True)
+                        record_video_dir_arg = str(video_dir)
+
                     context = await create_stealth_context(
                         browser,
                         viewport={"width": 1280, "height": 720},
                         user_agent=self.config.crawl.user_agent,
                         storage_state=storage,
+                        record_video_dir=record_video_dir_arg,
                     )
                     try:
                         result = await self._run_test(context, tc, baseline_dir)
@@ -143,9 +156,56 @@ class Executor:
                                 else:
                                     logger.error("Re-auth after session invalidation failed: %s",
                                                  auth_result.error)
-                        return result
                     finally:
                         await context.close()
+
+                    # "always" mode: attach video after context close finalizes it
+                    if capture_mode == "always" and video_dir:
+                        video_path = self._find_video_file(video_dir)
+                        if video_path:
+                            result.evidence.video_path = video_path
+                            logger.debug("Video recorded for %s: %s", tc.test_id, video_path)
+
+                    # "on_failure" mode: re-run failed tests with video
+                    if capture_mode == "on_failure" and result.result in ("fail", "error"):
+                        elapsed = time.time() - start_time
+                        if elapsed < self.config.max_execution_time_seconds:
+                            logger.info("Re-running %s with video capture for failure analysis...",
+                                        tc.test_id)
+                            rerun_evidence_dir = self.run_dir / "evidence" / tc.test_id / "video_rerun"
+                            rerun_evidence_dir.mkdir(parents=True, exist_ok=True)
+                            rerun_video_dir = rerun_evidence_dir / "video"
+                            rerun_video_dir.mkdir(parents=True, exist_ok=True)
+
+                            video_context = await create_stealth_context(
+                                browser,
+                                viewport={"width": 1280, "height": 720},
+                                user_agent=self.config.crawl.user_agent,
+                                storage_state=storage,
+                                record_video_dir=str(rerun_video_dir),
+                            )
+                            try:
+                                video_result = await self._run_test(video_context, tc, baseline_dir)
+                            finally:
+                                await video_context.close()
+
+                            video_path = self._find_video_file(rerun_video_dir)
+                            if video_path:
+                                result.evidence.video_path = video_path
+                                logger.debug("Failure video for %s: %s", tc.test_id, video_path)
+
+                            # Flaky detection: re-run passed but original failed
+                            if video_result.result == "pass":
+                                result.potentially_flaky = True
+                                logger.warning(
+                                    "Test %s is potentially flaky: failed initially but passed on re-run",
+                                    tc.test_id,
+                                )
+                        else:
+                            logger.warning("Skipping video re-run for %s: time limit approaching",
+                                           tc.test_id)
+
+                    return result
 
             test_results = list(await asyncio.gather(
                 *(_run_one(i, tc) for i, tc in enumerate(sorted_tests))
@@ -177,6 +237,17 @@ class Executor:
             run_result.errors, duration,
         )
         return run_result
+
+    @staticmethod
+    def _find_video_file(video_dir: Path) -> str | None:
+        """Find the .webm video file in a directory after context close."""
+        try:
+            for f in video_dir.iterdir():
+                if f.suffix == ".webm":
+                    return str(f)
+        except OSError:
+            pass
+        return None
 
     @staticmethod
     def _session_invalidated(result: TestResult) -> bool:
