@@ -413,8 +413,8 @@ class TestExecutorExecute:
         assert "Selector not found" in tr.step_results[0].error_message
 
     @pytest.mark.asyncio
-    async def test_page_grouping(self, tmp_path):
-        """Tests are grouped by target_page_id."""
+    async def test_multiple_page_targets(self, tmp_path):
+        """Tests targeting different pages all complete successfully."""
         mock_page = _make_mock_page()
         mock_context = _make_mock_context(mock_page)
 
@@ -535,3 +535,188 @@ class TestSessionInvalidation:
             ]),
         )
         assert Executor._session_invalidated(result) is False
+
+
+class TestParallelExecution:
+    """Tests for parallel test execution via asyncio.gather + semaphore."""
+
+    @pytest.mark.asyncio
+    async def test_semaphore_bounds_concurrency(self, tmp_path):
+        """No more than max_parallel_contexts tests run simultaneously."""
+        max_concurrent = 0
+        current_concurrent = 0
+        lock = asyncio.Lock()
+
+        async def tracking_run_action(page, action, **kwargs):
+            nonlocal max_concurrent, current_concurrent
+            async with lock:
+                current_concurrent += 1
+                if current_concurrent > max_concurrent:
+                    max_concurrent = current_concurrent
+            await asyncio.sleep(0.05)  # Simulate work
+            async with lock:
+                current_concurrent -= 1
+
+        config = _make_config()
+        config.max_parallel_contexts = 2
+        executor = Executor(config, ai_client=None, runs_dir=tmp_path)
+
+        tests = [_make_test_case(test_id=f"tc_{i}", target_page_id=f"p{i}") for i in range(6)]
+        plan = _make_plan(test_cases=tests)
+
+        with patch(ASYNC_PW) as mock_pw_cls, \
+             patch(STEALTH_BROWSER, return_value=AsyncMock()), \
+             patch(STEALTH_CONTEXT, side_effect=lambda *a, **kw: _make_mock_context()), \
+             patch("src.executor.executor.run_action", side_effect=tracking_run_action), \
+             patch("src.executor.executor.check_assertion", new_callable=AsyncMock) as mock_assert, \
+             patch("src.executor.executor.resolve_dynamic_vars_for_test_case"):
+            mock_pw_cls.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
+            mock_pw_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_assert.return_value = Mock(passed=True, message="OK", screenshots=[])
+
+            result = await executor.execute(plan)
+
+        assert result.total_tests == 6
+        assert result.passed == 6
+        assert max_concurrent <= 2, f"Concurrency exceeded limit: {max_concurrent} > 2"
+
+    @pytest.mark.asyncio
+    async def test_sequential_with_max_parallel_one(self, tmp_path):
+        """max_parallel_contexts=1 effectively runs tests sequentially."""
+        max_concurrent = 0
+        current_concurrent = 0
+        lock = asyncio.Lock()
+
+        async def tracking_run_action(page, action, **kwargs):
+            nonlocal max_concurrent, current_concurrent
+            async with lock:
+                current_concurrent += 1
+                if current_concurrent > max_concurrent:
+                    max_concurrent = current_concurrent
+            await asyncio.sleep(0.02)
+            async with lock:
+                current_concurrent -= 1
+
+        config = _make_config()
+        config.max_parallel_contexts = 1
+        executor = Executor(config, ai_client=None, runs_dir=tmp_path)
+
+        tests = [_make_test_case(test_id=f"tc_{i}", target_page_id=f"p{i}") for i in range(4)]
+        plan = _make_plan(test_cases=tests)
+
+        with patch(ASYNC_PW) as mock_pw_cls, \
+             patch(STEALTH_BROWSER, return_value=AsyncMock()), \
+             patch(STEALTH_CONTEXT, side_effect=lambda *a, **kw: _make_mock_context()), \
+             patch("src.executor.executor.run_action", side_effect=tracking_run_action), \
+             patch("src.executor.executor.check_assertion", new_callable=AsyncMock) as mock_assert, \
+             patch("src.executor.executor.resolve_dynamic_vars_for_test_case"):
+            mock_pw_cls.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
+            mock_pw_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_assert.return_value = Mock(passed=True, message="OK", screenshots=[])
+
+            result = await executor.execute(plan)
+
+        assert result.total_tests == 4
+        assert result.passed == 4
+        assert max_concurrent == 1
+
+    @pytest.mark.asyncio
+    async def test_session_invalidation_reauth_in_parallel(self, tmp_path):
+        """Session invalidation triggers re-auth protected by lock."""
+        auth = AuthConfig(login_url="https://example.com/login", username="u", password="p")
+        config = _make_config(auth=auth)
+        config.max_parallel_contexts = 2
+        executor = Executor(config, ai_client=None, runs_dir=tmp_path)
+
+        # First test triggers logout, second test is normal
+        tc_logout = _make_test_case(test_id="tc_logout", requires_auth=True)
+        tc_normal = _make_test_case(test_id="tc_normal", requires_auth=True)
+        plan = _make_plan(test_cases=[tc_logout, tc_normal])
+
+        auth_result = Mock(success=True, auth_flow=Mock(detection_method="explicit"))
+        initial_storage = {"cookies": [{"name": "session", "value": "initial"}]}
+        refreshed_storage = {"cookies": [{"name": "session", "value": "refreshed"}]}
+
+        auth_call_count = 0
+
+        async def mock_auth_fn(*args, **kwargs):
+            nonlocal auth_call_count
+            auth_call_count += 1
+            if auth_call_count == 1:
+                return (auth_result, initial_storage)
+            return (auth_result, refreshed_storage)
+
+        # Make the logout test return a network log that triggers session invalidation
+        logout_page = _make_mock_page()
+        normal_page = _make_mock_page()
+
+        logout_context = _make_mock_context(logout_page)
+        normal_context = _make_mock_context(normal_page)
+
+        context_idx = 0
+
+        def make_context(*args, **kwargs):
+            nonlocal context_idx
+            context_idx += 1
+            if context_idx == 1:
+                return logout_context
+            return normal_context
+
+        # Patch _session_invalidated to return True for logout test
+        original_invalidated = Executor._session_invalidated
+
+        def patched_invalidated(result):
+            if result.test_id == "tc_logout":
+                return True
+            return original_invalidated(result)
+
+        with patch(ASYNC_PW) as mock_pw_cls, \
+             patch(STEALTH_BROWSER, return_value=AsyncMock()), \
+             patch(STEALTH_CONTEXT, side_effect=make_context), \
+             patch(AUTH_CAPTURE, side_effect=mock_auth_fn), \
+             patch("src.executor.executor.run_action", new_callable=AsyncMock), \
+             patch("src.executor.executor.check_assertion", new_callable=AsyncMock) as mock_assert, \
+             patch("src.executor.executor.resolve_dynamic_vars_for_test_case"), \
+             patch.object(Executor, "_session_invalidated", staticmethod(patched_invalidated)):
+            mock_pw_cls.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
+            mock_pw_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_assert.return_value = Mock(passed=True, message="OK", screenshots=[])
+
+            result = await executor.execute(plan)
+
+        assert result.total_tests == 2
+        assert result.passed == 2
+        # Initial auth + re-auth after session invalidation
+        assert auth_call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_parallel_results_preserve_order(self, tmp_path):
+        """Results from asyncio.gather maintain the order of sorted tests."""
+        config = _make_config()
+        config.max_parallel_contexts = 3
+        executor = Executor(config, ai_client=None, runs_dir=tmp_path)
+
+        # Priority order: tc_high (1) → tc_mid (3) → tc_low (5)
+        tests = [
+            _make_test_case(test_id="tc_low", priority=5, target_page_id="p1"),
+            _make_test_case(test_id="tc_high", priority=1, target_page_id="p2"),
+            _make_test_case(test_id="tc_mid", priority=3, target_page_id="p3"),
+        ]
+        plan = _make_plan(test_cases=tests)
+
+        with patch(ASYNC_PW) as mock_pw_cls, \
+             patch(STEALTH_BROWSER, return_value=AsyncMock()), \
+             patch(STEALTH_CONTEXT, side_effect=lambda *a, **kw: _make_mock_context()), \
+             patch("src.executor.executor.run_action", new_callable=AsyncMock), \
+             patch("src.executor.executor.check_assertion", new_callable=AsyncMock) as mock_assert, \
+             patch("src.executor.executor.resolve_dynamic_vars_for_test_case"):
+            mock_pw_cls.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
+            mock_pw_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_assert.return_value = Mock(passed=True, message="OK", screenshots=[])
+
+            result = await executor.execute(plan)
+
+        # Results should be in priority-sorted order (gather preserves input order)
+        assert result.test_results[0].test_id == "tc_high"
+        assert result.test_results[1].test_id == "tc_mid"
+        assert result.test_results[2].test_id == "tc_low"

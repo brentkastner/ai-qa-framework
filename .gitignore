@@ -26,3 +26,7 @@ build/
 .env
 .venv/
 venv/
+
+#AI Stuff
+CLAUDE.md
+IMPROVEMENT_PLAN.md
