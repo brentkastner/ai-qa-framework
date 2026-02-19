@@ -69,16 +69,6 @@ class Executor:
 
         sorted_tests = sorted(plan.test_cases, key=lambda tc: tc.priority)
 
-        page_groups: dict[str, list[TestCase]] = {}
-        for tc in sorted_tests:
-            key = tc.target_page_id or "ungrouped"
-            page_groups.setdefault(key, []).append(tc)
-        logger.debug("Tests grouped into %d page groups", len(page_groups))
-
-        test_results: list[TestResult] = []
-        remaining_time = self.config.max_execution_time_seconds
-        test_counter = 0
-
         async with async_playwright() as p:
             logger.debug("Launching stealth Chromium for test execution...")
             browser = await launch_stealth_browser(p)
@@ -100,42 +90,31 @@ class Executor:
                 else:
                     logger.error("Initial auth failed: %s", auth_result.error)
 
-            for group_key, tests in page_groups.items():
-                if remaining_time <= 0:
-                    logger.warning("Time limit reached, skipping remaining tests")
-                    for tc in tests:
-                        test_results.append(TestResult(
-                            test_id=tc.test_id, test_name=tc.name,
-                            description=tc.description, category=tc.category,
-                            priority=tc.priority, target_page_id=tc.target_page_id,
-                            coverage_signature=tc.coverage_signature,
-                            result="skip", failure_reason="Time limit reached",
-                        ))
-                    continue
+            # Run tests in parallel, bounded by max_parallel_contexts
+            semaphore = asyncio.Semaphore(self.config.max_parallel_contexts)
+            auth_lock = asyncio.Lock()
+            auth_state: dict[str, dict | None] = {"storage": auth_storage_state}
 
-                for tc in tests:
+            async def _run_one(index: int, tc: TestCase) -> TestResult:
+                async with semaphore:
                     elapsed = time.time() - start_time
-                    remaining_time = self.config.max_execution_time_seconds - elapsed
-                    if remaining_time <= 0:
+                    if elapsed >= self.config.max_execution_time_seconds:
                         logger.warning("Time limit reached, skipping %s", tc.name)
-                        test_results.append(TestResult(
+                        return TestResult(
                             test_id=tc.test_id, test_name=tc.name,
                             description=tc.description, category=tc.category,
                             priority=tc.priority, target_page_id=tc.target_page_id,
                             coverage_signature=tc.coverage_signature,
                             result="skip", failure_reason="Time limit reached",
-                        ))
-                        continue
+                        )
 
-                    test_counter += 1
                     logger.info("Running test [%d/%d]: %s (%s)",
-                                test_counter, total_tests, tc.name, tc.category)
+                                index + 1, total_tests, tc.name, tc.category)
                     logger.debug("  Test ID: %s | Page: %s | Timeout: %ds | requires_auth: %s",
                                  tc.test_id, tc.target_page_id, tc.timeout_seconds,
                                  tc.requires_auth)
 
-                    # Create an isolated context for this test
-                    storage = auth_storage_state if (tc.requires_auth and self.config.auth) else None
+                    storage = auth_state["storage"] if (tc.requires_auth and self.config.auth) else None
                     context = await create_stealth_context(
                         browser,
                         viewport={"width": 1280, "height": 720},
@@ -144,28 +123,33 @@ class Executor:
                     )
                     try:
                         result = await self._run_test(context, tc, baseline_dir)
-                        test_results.append(result)
                         logger.info("[%s] %s: %s (%.1fs)",
                                     result.result.upper(), tc.test_id, tc.name,
                                     result.duration_seconds or 0)
 
-                        # If the test invalidated the session (e.g. logout),
-                        # re-capture auth state so subsequent tests get valid cookies.
                         if self.config.auth and self._session_invalidated(result):
-                            logger.info("Session invalidated by %s, re-capturing auth state...",
-                                        tc.test_id)
-                            auth_result, auth_storage_state = await authenticate_and_capture_state(
-                                browser,
-                                self.config.auth,
-                                ai_client=self.ai_client,
-                                viewport={"width": 1280, "height": 720},
-                                user_agent=self.config.crawl.user_agent,
-                            )
-                            if not auth_result.success:
-                                logger.error("Re-auth after session invalidation failed: %s",
-                                             auth_result.error)
+                            async with auth_lock:
+                                logger.info("Session invalidated by %s, re-capturing auth state...",
+                                            tc.test_id)
+                                auth_result, new_state = await authenticate_and_capture_state(
+                                    browser,
+                                    self.config.auth,
+                                    ai_client=self.ai_client,
+                                    viewport={"width": 1280, "height": 720},
+                                    user_agent=self.config.crawl.user_agent,
+                                )
+                                if auth_result.success:
+                                    auth_state["storage"] = new_state
+                                else:
+                                    logger.error("Re-auth after session invalidation failed: %s",
+                                                 auth_result.error)
+                        return result
                     finally:
                         await context.close()
+
+            test_results = list(await asyncio.gather(
+                *(_run_one(i, tc) for i, tc in enumerate(sorted_tests))
+            ))
 
             await browser.close()
 
