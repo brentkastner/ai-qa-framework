@@ -897,7 +897,7 @@ Model   Plan   Results  Reports
 ```json
 "report_formats": ["html", "json"],
 "report_output_dir": "./qa-reports",
-"capture_video": false
+"capture_video": "on_failure"
 ```
 
 ##### URL Filtering
