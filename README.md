@@ -29,7 +29,8 @@ python -m src.cli run
 
 - **Zero test scripts** - AI generates tests by understanding your site
 - **Self-healing** - When selectors break, AI analyzes screenshots and fixes them
-- **Comprehensive coverage** - Functional, visual, and security testing in one pass
+- **Comprehensive coverage** - Functional, visual, security, and API testing in one pass
+- **API testing** - Real HTTP calls via Playwright's request context, not a headless browser
 - **Natural language hints** - Guide priorities without writing test specs
 - **Coverage memory** - Tracks what's been tested, focuses on gaps
 
@@ -53,7 +54,7 @@ Create `qa-config.json`:
 ```json
 {
   "target_url": "https://yoursite.com",
-  "categories": ["functional", "visual", "security"],
+  "categories": ["functional", "visual", "security", "api"],
   "hints": [
     "The checkout flow is our most critical path"
   ]
@@ -110,6 +111,7 @@ open qa-reports/report_*.html
 - **Functional tests** - Forms, navigation, workflows, CRUD
 - **Visual regression** - Screenshot baselines, responsive design
 - **Security checks** - XSS, HTTPS, cookies, headers
+- **API tests** - Direct HTTP calls against observed endpoints, with JSON path and status assertions
 - **Evidence collection** - Screenshots, logs, network activity
 
 **→ [See all features in detail](./OVERVIEW.md#key-features)**
@@ -153,6 +155,23 @@ open qa-reports/report_*.html
 ```
 
 Hints guide AI priorities without writing test specifications. The AI interprets them and adjusts test generation accordingly.
+
+### With API Testing
+
+```json
+{
+  "target_url": "https://yoursite.com",
+  "backend_url": "https://api.yoursite.com",
+  "categories": ["functional", "api"]
+}
+```
+
+The crawler captures every XHR/fetch request made by the browser during crawling. When `"api"` is in `categories`, the AI generates direct HTTP tests for those observed endpoints — no browser page is opened, requests go through Playwright's `APIRequestContext` and share the authenticated session automatically.
+
+- **`backend_url`** (optional) — when set, only endpoints whose URL starts with this value are sent to the AI. Use this to focus on your own backend and exclude third-party calls (analytics, CDN, etc.).
+- **Test names** follow the format `[METHOD] description` — e.g. `[GET] List products`, `[POST] Create order`.
+- **Supported assertions:** `response_status`, `response_json_path`, `response_body_contains`, `response_header`.
+- **No browser assertions** (`element_visible`, `screenshot_diff`, etc.) are allowed in API tests.
 
 **→ [Complete configuration reference](./REQUIREMENTS.md#configuration)**
 
@@ -293,6 +312,7 @@ open qa-reports/report_*.html
 - XSS vulnerability in product review form → Flagged
 - Visual regression: Logo alignment shifted → Screenshot diff
 - Checkout flow: 100% passing
+- `[POST] /api/orders` returns 500 on valid payload → Flagged
 
 **→ [See full example walkthrough](./OVERVIEW.md#real-world-example)**
 
