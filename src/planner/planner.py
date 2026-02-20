@@ -56,7 +56,8 @@ class Planner:
 
         # Build config summary
         config_summary = (
-            f"Categories: {', '.join(self.config.categories)}\n"
+            f"Categories (ONLY generate tests for these categories — do not generate any others): "
+            f"{', '.join(self.config.categories)}\n"
             f"Max tests: {self.config.max_tests_per_run}\n"
             f"Visual diff tolerance: {self.config.visual_diff_tolerance}\n"
             f"Viewports: {json.dumps([v.model_dump() for v in self.config.viewports])}\n"
@@ -103,20 +104,43 @@ class Planner:
                 ]
             # Inject real credentials in place of placeholder tokens
             plan = self._inject_credentials(plan)
+            plan = self._filter_by_categories(plan)
             logger.info("Generated plan with %d test cases", len(plan.test_cases))
             return plan
         except Exception as e:
             logger.error("Failed to parse AI plan: %s. Using fallback.", e)
-            return self._inject_credentials(self._generate_fallback_plan(site_model))
+            plan = self._inject_credentials(self._generate_fallback_plan(site_model))
+            return self._filter_by_categories(plan)
 
     def _summarize_site_model(self, site_model: SiteModel) -> str:
         """Create a condensed version of the site model for the AI prompt."""
-        summary = {
+        summary: dict = {
             "base_url": site_model.base_url,
             "pages": [],
             "api_endpoints_count": len(site_model.api_endpoints),
             "has_auth": site_model.auth_flow is not None,
         }
+
+        # Include full API endpoint details when the "api" category is enabled
+        if "api" in self.config.categories and site_model.api_endpoints:
+            endpoints = site_model.api_endpoints
+            # When backend_url is configured, only send own-backend endpoints to the AI
+            if self.config.backend_url:
+                endpoints = [ep for ep in endpoints if ep.is_own_backend]
+            capped = endpoints[:50]
+            logger.debug("Sending %d API endpoint(s) to AI (total captured: %d):", len(capped), len(endpoints))
+            for ep in capped:
+                logger.debug("  %s %s (status codes: %s)", ep.method, ep.url, ep.status_codes_seen)
+            summary["api_endpoints"] = [
+                {
+                    "url": ep.url,
+                    "method": ep.method,
+                    "response_content_type": ep.response_content_type,
+                    "status_codes_seen": ep.status_codes_seen,
+                    "is_own_backend": ep.is_own_backend,
+                }
+                for ep in capped
+            ]
 
         for page in site_model.pages[:30]:  # Limit pages
             page_summary = {
@@ -164,11 +188,24 @@ class Planner:
                 steps = [Action(**a) for a in tc_data.get("steps", [])]
                 assertions = [Assertion(**a) for a in tc_data.get("assertions", [])]
 
+                category = tc_data.get("category", "functional")
+
+                # Auto-correct: if any action is an API type, force category to "api"
+                # regardless of what the AI returned — mistagging causes runtime skips.
+                _api_action_types = {"api_get", "api_post", "api_put", "api_delete", "api_patch"}
+                all_actions = preconditions + steps
+                if any(a.action_type in _api_action_types for a in all_actions) and category != "api":
+                    logger.warning(
+                        "Test case '%s' has api_* actions but category='%s' — correcting to 'api'",
+                        tc_data.get("test_id", "?"), category,
+                    )
+                    category = "api"
+
                 tc = TestCase(
                     test_id=tc_data.get("test_id", f"tc_{uuid.uuid4().hex[:6]}"),
                     name=tc_data.get("name", "Unnamed test"),
                     description=tc_data.get("description", ""),
-                    category=tc_data.get("category", "functional"),
+                    category=category,
                     priority=tc_data.get("priority", 3),
                     target_page_id=tc_data.get("target_page_id", ""),
                     coverage_signature=tc_data.get("coverage_signature", ""),
@@ -282,6 +319,34 @@ class Planner:
                     )],
                 ))
 
+        # API fallback tests — one GET per captured endpoint
+        if "api" in self.config.categories:
+            endpoints = site_model.api_endpoints
+            if self.config.backend_url:
+                endpoints = [ep for ep in endpoints if ep.is_own_backend]
+            for ep in endpoints[:self.config.max_tests_per_run]:
+                tc_num += 1
+                action_type = f"api_{ep.method.lower()}"
+                test_cases.append(TestCase(
+                    test_id=f"tc_fallback_{tc_num:03d}",
+                    name=f"[{ep.method}] {ep.url}",
+                    description=f"Sends a {ep.method} request to {ep.url} and verifies a successful response",
+                    category="api",
+                    priority=2,
+                    target_page_id="",
+                    coverage_signature=f"api_{ep.method}_{ep.url}",
+                    steps=[Action(
+                        action_type=action_type,
+                        selector=ep.url,
+                        description=f"{ep.method} {ep.url}",
+                    )],
+                    assertions=[Assertion(
+                        assertion_type="response_status",
+                        expected_value=str(ep.status_codes_seen[0]) if ep.status_codes_seen else "200",
+                        description=f"Response status is {ep.status_codes_seen[0] if ep.status_codes_seen else 200}",
+                    )],
+                ))
+
         return TestPlan(
             plan_id=f"plan_fallback_{uuid.uuid4().hex[:8]}",
             generated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -289,6 +354,19 @@ class Planner:
             test_cases=test_cases[:self.config.max_tests_per_run],
             estimated_duration_seconds=len(test_cases) * 10,
         )
+
+    def _filter_by_categories(self, plan: TestPlan) -> TestPlan:
+        """Remove test cases whose category is not in the configured categories list."""
+        allowed = set(self.config.categories)
+        before = len(plan.test_cases)
+        plan.test_cases = [tc for tc in plan.test_cases if tc.category in allowed]
+        removed = before - len(plan.test_cases)
+        if removed:
+            logger.info(
+                "Filtered %d test case(s) with categories not in config %s",
+                removed, sorted(allowed),
+            )
+        return plan
 
     @staticmethod
     def _has_auth_placeholders(tc: TestCase) -> bool:

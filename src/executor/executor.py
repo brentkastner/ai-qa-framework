@@ -26,7 +26,7 @@ from src.models.visual_baseline import VisualBaselineRegistry
 from src.url_utils import page_id_from_url
 
 from .action_runner import resolve_dynamic_vars_for_test_case, run_action
-from .assertion_checker import check_assertion
+from .assertion_checker import check_assertion, check_api_assertion
 from .evidence_collector import EvidenceCollector
 from .fallback import FallbackHandler
 
@@ -97,6 +97,18 @@ class Executor:
 
             async def _run_one(index: int, tc: TestCase) -> TestResult:
                 async with semaphore:
+                    if tc.category not in self.config.categories:
+                        logger.info("Skipping %s — category '%s' not in configured categories %s",
+                                    tc.test_id, tc.category, self.config.categories)
+                        return TestResult(
+                            test_id=tc.test_id, test_name=tc.name,
+                            description=tc.description, category=tc.category,
+                            priority=tc.priority, target_page_id=tc.target_page_id,
+                            coverage_signature=tc.coverage_signature,
+                            result="skip",
+                            failure_reason=f"Category '{tc.category}' not in configured categories",
+                        )
+
                     elapsed = time.time() - start_time
                     if elapsed >= self.config.max_execution_time_seconds:
                         logger.warning("Time limit reached, skipping %s", tc.name)
@@ -178,6 +190,101 @@ class Executor:
         )
         return run_result
 
+    async def _run_api_test(self, context, tc: TestCase) -> TestResult:
+        """Run an API test using Playwright's request context — no browser page opened.
+
+        All actions must be api_get / api_post / api_put / api_delete / api_patch.
+        Assertions operate on the HTTP response returned by the last action.
+        """
+        test_start = time.time()
+
+        resolve_dynamic_vars_for_test_case(tc.preconditions + tc.steps)
+
+        api = context.request
+        step_results: list[StepResult] = []
+        assertion_results_list: list[AssertionResultModel] = []
+        last_response_data: dict = {}
+        aborted = False
+
+        for step_idx, action in enumerate(list(tc.preconditions) + list(tc.steps)):
+            if aborted:
+                step_results.append(StepResult(
+                    step_index=step_idx, action_type=action.action_type,
+                    selector=action.selector, value=action.value,
+                    description=action.description, status="skip",
+                    error_message="Skipped due to earlier step failure",
+                ))
+                continue
+            try:
+                resp_data = await _run_api_action(api, action)
+                last_response_data = resp_data
+                logger.debug("  API step %d: %s %s -> HTTP %d",
+                             step_idx, action.action_type, action.selector,
+                             resp_data.get("status", 0))
+                step_results.append(StepResult(
+                    step_index=step_idx, action_type=action.action_type,
+                    selector=action.selector, value=action.value,
+                    description=action.description, status="pass",
+                ))
+            except Exception as e:
+                logger.warning("  API step %d failed: %s", step_idx, e)
+                step_results.append(StepResult(
+                    step_index=step_idx, action_type=action.action_type,
+                    selector=action.selector, value=action.value,
+                    description=action.description, status="fail",
+                    error_message=str(e),
+                ))
+                aborted = True
+
+        passed_count = 0
+        failed_count = 0
+        failure_reasons: list[str] = []
+
+        for a_idx, assertion in enumerate(tc.assertions):
+            result = check_api_assertion(assertion, last_response_data)
+            ar = AssertionResultModel(
+                assertion_type=assertion.assertion_type,
+                selector=assertion.selector,
+                expected_value=assertion.expected_value,
+                description=assertion.description,
+                passed=result.passed,
+                message=result.message,
+            )
+            assertion_results_list.append(ar)
+            if result.passed:
+                passed_count += 1
+                logger.debug("  API assertion %d/%d: PASSED — %s",
+                             a_idx + 1, len(tc.assertions), result.message)
+            else:
+                failed_count += 1
+                failure_reasons.append(f"{assertion.description or assertion.assertion_type}: {result.message}")
+                logger.debug("  API assertion %d/%d: FAILED — %s",
+                             a_idx + 1, len(tc.assertions), result.message)
+
+        test_result_status = "pass" if failed_count == 0 and not aborted else "fail"
+        if aborted and failed_count == 0:
+            test_result_status = "error"
+
+        return TestResult(
+            test_id=tc.test_id,
+            test_name=tc.name,
+            description=tc.description,
+            category=tc.category,
+            priority=tc.priority,
+            target_page_id=tc.target_page_id,
+            actual_page_id=tc.target_page_id,
+            actual_url=last_response_data.get("url", ""),
+            coverage_signature=tc.coverage_signature,
+            result=test_result_status,
+            duration_seconds=round(time.time() - test_start, 2),
+            failure_reason="; ".join(failure_reasons) if failure_reasons else None,
+            step_results=step_results,
+            assertion_results=assertion_results_list,
+            assertions_passed=passed_count,
+            assertions_failed=failed_count,
+            assertions_total=len(tc.assertions),
+        )
+
     @staticmethod
     def _session_invalidated(result: TestResult) -> bool:
         """Check if a test likely invalidated the auth session (e.g. logout)."""
@@ -196,6 +303,9 @@ class Executor:
         self, context, test_case: TestCase, baseline_dir: Path | None,
     ) -> TestResult:
         """Run a single test case with full step/assertion detail recording."""
+        if test_case.category == "api":
+            return await self._run_api_test(context, test_case)
+
         tc = test_case
         test_start = time.time()
         evidence_dir = self.run_dir / "evidence" / tc.test_id
@@ -479,3 +589,71 @@ class Executor:
             )
         finally:
             await page.close()
+
+
+# ---------------------------------------------------------------------------
+# Module-level helper for API actions (used by Executor._run_api_test)
+# ---------------------------------------------------------------------------
+
+async def _run_api_action(api, action) -> dict:
+    """Execute a single API HTTP action and return parsed response data.
+
+    Uses the Playwright APIRequestContext (``context.request``) which
+    automatically shares cookies and auth state with the browser context.
+
+    action.action_type  — one of: api_get, api_post, api_put, api_delete, api_patch
+    action.selector     — full or relative URL
+    action.value        — JSON-encoded request body (for POST / PUT / PATCH)
+    """
+    import json as _json
+
+    url = action.selector or ""
+    if not url:
+        raise ValueError(
+            f"API action '{action.action_type}' requires a URL in the selector field"
+        )
+
+    post_data = None
+    if action.value:
+        try:
+            post_data = _json.loads(action.value)
+        except (_json.JSONDecodeError, TypeError):
+            post_data = action.value  # send as raw string
+
+    # Use `json=` for dict payloads so Playwright sends Content-Type: application/json.
+    # Raw strings are passed via `data=` as-is.
+    def _kwargs(body):
+        if isinstance(body, dict):
+            return {"json": body}
+        if body is not None:
+            return {"data": body}
+        return {}
+
+    match action.action_type:
+        case "api_get":
+            response = await api.get(url)
+        case "api_post":
+            response = await api.post(url, **_kwargs(post_data))
+        case "api_put":
+            response = await api.put(url, **_kwargs(post_data))
+        case "api_delete":
+            response = await api.delete(url)
+        case "api_patch":
+            response = await api.patch(url, **_kwargs(post_data))
+        case _:
+            raise ValueError(f"Unknown API action type: {action.action_type}")
+
+    body_text = await response.text()
+    body_json = None
+    try:
+        body_json = await response.json()
+    except Exception:
+        pass
+
+    return {
+        "status": response.status,
+        "headers": dict(response.headers),
+        "body": body_text,
+        "json": body_json,
+        "url": url,
+    }

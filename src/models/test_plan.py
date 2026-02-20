@@ -8,17 +8,26 @@ from pydantic import BaseModel, Field
 
 
 class Action(BaseModel):
-    action_type: str  # navigate, click, fill, select, hover, scroll, wait, screenshot, keyboard
+    # Browser actions: navigate, click, fill, select, hover, scroll, wait, screenshot, keyboard
+    # API actions (category="api" tests only): api_get, api_post, api_put, api_delete, api_patch
+    #   selector = full endpoint URL; value = JSON-encoded request body (POST/PUT/PATCH)
+    action_type: str
     selector: Optional[str] = None
     value: Optional[str] = None
     description: str = ""
 
 
 class Assertion(BaseModel):
-    assertion_type: str  # element_visible, element_hidden, text_contains, text_equals,
-    # text_matches, url_matches, screenshot_diff, element_count,
-    # network_request_made, no_console_errors, response_status,
-    # ai_evaluate, page_title_contains, page_loaded
+    # Browser assertions: element_visible, element_hidden, text_contains, text_equals,
+    #   text_matches, url_matches, screenshot_diff, element_count,
+    #   network_request_made, no_console_errors, response_status,
+    #   ai_evaluate, page_title_contains, page_loaded
+    # API assertions (category="api" tests only):
+    #   response_status      — expected_value = HTTP status code string e.g. "200"
+    #   response_body_contains — expected_value = substring to find in response body
+    #   response_json_path   — selector = dot-notation path e.g. "data.id"; expected_value = expected substring
+    #   response_header      — selector = header name; expected_value = expected substring in header value
+    assertion_type: str
     selector: Optional[str] = None
     expected_value: Optional[str] = None
     tolerance: Optional[float] = None

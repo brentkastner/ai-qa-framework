@@ -1,5 +1,6 @@
 {
   "target_url": "https://example.com/",
+  "backend_url": null,
   "auth": null,
   "crawl": {
     "target_url": "https://example.com/",
@@ -20,7 +21,8 @@
   "categories": [
     "functional",
     "visual",
-    "security"
+    "security",
+    "api"
   ],
   "max_tests_per_run": 30,
   "max_execution_time_seconds": 1800,
