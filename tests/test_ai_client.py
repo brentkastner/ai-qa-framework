@@ -44,6 +44,35 @@ class TestAIClient:
             client = AIClient(max_tokens=16000)
             assert client.max_tokens == 16000
 
+    def test_init_ollama_no_api_key(self):
+        """Ollama provider should not require Anthropic API key."""
+        with patch.dict(os.environ, {}, clear=True):
+            client = AIClient(
+                provider="ollama",
+                model="llama3.2",
+            )
+            assert client.provider == "ollama"
+            assert client.base_url == "http://localhost:11434"
+
+    @patch("src.ai.client.urllib_request.urlopen")
+    def test_complete_ollama_success(self, mock_urlopen):
+        """Test successful completion request via Ollama API."""
+        mock_response = MagicMock()
+        mock_response.read.return_value = b'{"message":{"content":"AI response text"}}'
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        client = AIClient(
+            provider="ollama",
+            model="llama3.2",
+            base_url="http://localhost:11434",
+        )
+        with patch.object(client, "_save_exchange_log"):
+            response = client.complete("system", "Hello")
+
+        assert response == "AI response text"
+        assert client.call_count == 1
+        mock_urlopen.assert_called_once()
+
     @patch("anthropic.Anthropic")
     def test_complete_success(self, mock_anthropic_class):
         """Test successful completion request."""

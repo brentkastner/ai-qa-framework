@@ -16,7 +16,7 @@ playwright install chromium
 # Configure
 python -m src.cli init --target https://yoursite.com
 
-# Run
+# Run (Anthropic)
 export ANTHROPIC_API_KEY=your_key_here
 python -m src.cli run
 ```
@@ -69,10 +69,18 @@ python -m src.cli init --target https://yoursite.com
 ### 3. Run Tests
 
 ```bash
-# Set your Anthropic API key
+# Option A: Anthropic
 export ANTHROPIC_API_KEY=your_key_here
 
 # Run the full pipeline
+python -m src.cli run
+```
+
+```bash
+# Option B: Local Ollama (no API key required)
+# In qa-config.json:
+# "ai_provider": "ollama"
+# "ai_model": "llama3.2"
 python -m src.cli run
 
 # View the report
@@ -220,16 +228,18 @@ python -m src.cli hint clear
 
 - **Python 3.12+**
 - **Chromium** (via `playwright install chromium`)
-- **Anthropic API key** (optional but recommended)
+- **Anthropic API key** (optional, if using `ai_provider: "anthropic"`)
+- **Ollama** local runtime (optional, if using `ai_provider: "ollama"`)
 
 ### Environment Variables
 
 ```bash
 export ANTHROPIC_API_KEY=your_key_here    # For AI features
+export OLLAMA_BASE_URL=http://localhost:11434  # Optional override for Ollama host
 export QA_TEST_PASSWORD=secret            # For auth (if needed)
 ```
 
-**Without an API key**, the framework operates in fallback mode:
+**Without any configured AI provider**, the framework operates in fallback mode:
 - Basic test generation (template-based)
 - No AI summaries or error recovery
 - All execution features remain available

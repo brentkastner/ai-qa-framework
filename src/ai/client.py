@@ -1,4 +1,4 @@
-"""Claude API client wrapper for the QA framework."""
+"""AI client wrapper for the QA framework (Anthropic and Ollama)."""
 
 from __future__ import annotations
 
@@ -7,10 +7,12 @@ import logging
 import os
 import random
 import re
+import socket
 import time
-import traceback
 from pathlib import Path
 from typing import Any, Optional
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 import anthropic
 
@@ -37,20 +39,36 @@ def _get_debug_dir() -> Path:
 
 
 class AIClient:
-    """Wrapper around the Anthropic Claude API."""
+    """Wrapper around supported AI providers."""
 
     MAX_RETRIES = 3
     BASE_DELAY = 1.0  # seconds
 
-    def __init__(self, model: str = "claude-opus-4-6", max_tokens: int = 32000):
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise EnvironmentError(
-                "ANTHROPIC_API_KEY environment variable is not set. "
-                "Please set it before running the framework."
+    def __init__(
+        self,
+        model: str = "claude-opus-4-6",
+        max_tokens: int = 32000,
+        provider: str = "anthropic",
+        base_url: str | None = None,
+    ):
+        self.provider = provider.strip().lower()
+        if self.provider not in {"anthropic", "ollama"}:
+            raise ValueError(
+                f"Unsupported ai provider '{provider}'. "
+                "Supported providers: anthropic, ollama"
             )
-        # Set a longer timeout for large planning requests (30 minutes)
-        self.client = anthropic.Anthropic(api_key=api_key, timeout=1800.0)
+
+        self.client = None
+        self.base_url = (base_url or os.environ.get("OLLAMA_BASE_URL") or "http://localhost:11434").rstrip("/")
+        if self.provider == "anthropic":
+            api_key = os.environ.get("ANTHROPIC_API_KEY")
+            if not api_key:
+                raise EnvironmentError(
+                    "ANTHROPIC_API_KEY environment variable is not set. "
+                    "Please set it before running the framework."
+                )
+            # Set a longer timeout for large planning requests (30 minutes)
+            self.client = anthropic.Anthropic(api_key=api_key, timeout=1800.0)
         self.model = model
         self.max_tokens = max_tokens
         self._call_count = 0
@@ -61,11 +79,15 @@ class AIClient:
 
     @staticmethod
     def _is_retryable(error: Exception) -> bool:
-        """Check if an API error is transient and worth retrying."""
+        """Check if a provider/API error is transient and worth retrying."""
         if isinstance(error, anthropic.APIConnectionError):
             return True
         if isinstance(error, anthropic.APIStatusError):
             return error.status_code in (429, 529, 500, 502, 503, 504)
+        if isinstance(error, urllib_error.HTTPError):
+            return error.code in (429, 500, 502, 503, 504)
+        if isinstance(error, (urllib_error.URLError, TimeoutError, socket.timeout)):
+            return True
         return False
 
     def _call_with_retry(self, api_call, call_label: str):
@@ -77,7 +99,7 @@ class AIClient:
         for attempt in range(1 + self.MAX_RETRIES):
             try:
                 return api_call()
-            except anthropic.APIError as e:
+            except Exception as e:
                 last_error = e
                 if not self._is_retryable(e) or attempt == self.MAX_RETRIES:
                     raise
@@ -88,6 +110,60 @@ class AIClient:
                     e, delay,
                 )
                 time.sleep(delay)
+        if last_error:
+            raise last_error
+
+    def _ollama_chat(
+        self,
+        system_prompt: str,
+        user_message: str,
+        max_tokens: int,
+        temperature: float,
+        image_base64: str | None = None,
+    ) -> str:
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "stream": False,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            "options": {
+                "num_predict": max_tokens,
+                "temperature": temperature,
+            },
+        }
+        if image_base64:
+            payload["messages"][1]["images"] = [image_base64]
+
+        req = urllib_request.Request(
+            url=f"{self.base_url}/api/chat",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        def _send() -> str:
+            with urllib_request.urlopen(req, timeout=1800) as response:
+                body = response.read().decode("utf-8")
+                data = json.loads(body)
+                if isinstance(data.get("message"), dict):
+                    return data["message"].get("content", "")
+                if isinstance(data.get("response"), str):
+                    return data["response"]
+                raise ValueError(f"Unexpected Ollama response shape: {data!r}")
+
+        try:
+            return self._call_with_retry(_send, call_label=f"ollama_chat (call #{self._call_count})")
+        except urllib_error.HTTPError as e:
+            error_body = ""
+            try:
+                error_body = e.read().decode("utf-8")
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"Ollama HTTP error {e.code} calling {self.base_url}/api/chat: {error_body or e.reason}"
+            ) from e
 
     def complete(
         self,
@@ -96,7 +172,7 @@ class AIClient:
         max_tokens: Optional[int] = None,
         temperature: float = 0.3,
     ) -> str:
-        """Send a completion request to Claude and return the text response."""
+        """Send a completion request to the configured provider."""
         self._call_count += 1
         tokens = max_tokens or self.max_tokens
         logger.info(
@@ -108,23 +184,33 @@ class AIClient:
 
         try:
             call_start = time.time()
-            response = self._call_with_retry(
-                lambda: self.client.messages.create(
-                    model=self.model,
+            if self.provider == "anthropic":
+                response = self._call_with_retry(
+                    lambda: self.client.messages.create(
+                        model=self.model,
+                        max_tokens=tokens,
+                        temperature=temperature,
+                        system=system_prompt,
+                        messages=[{"role": "user", "content": user_message}],
+                    ),
+                    call_label=f"complete (call #{self._call_count})",
+                )
+                text = response.content[0].text
+                stop_reason = response.stop_reason
+            else:
+                text = self._ollama_chat(
+                    system_prompt=system_prompt,
+                    user_message=user_message,
                     max_tokens=tokens,
                     temperature=temperature,
-                    system=system_prompt,
-                    messages=[{"role": "user", "content": user_message}],
-                ),
-                call_label=f"complete (call #{self._call_count})",
-            )
+                )
+                stop_reason = None
             call_duration = time.time() - call_start
-            text = response.content[0].text
             logger.info("AI response received in %.1fs (%d chars)",
                         call_duration, len(text))
 
             # Detect if response was truncated due to token limit
-            if response.stop_reason == "max_tokens":
+            if stop_reason == "max_tokens":
                 logger.warning(
                     "AI response was truncated! Hit max_tokens limit (%d). "
                     "Response may be incomplete. Consider increasing ai_max_planning_tokens in config.",
@@ -141,8 +227,8 @@ class AIClient:
             )
 
             return text
-        except anthropic.APIError as e:
-            logger.error("Claude API error: %s", e)
+        except Exception as e:
+            logger.error("AI provider error (%s): %s", self.provider, e)
             self._save_exchange_log(
                 call_number=self._call_count,
                 system_prompt=system_prompt,
@@ -181,32 +267,41 @@ class AIClient:
 
         try:
             call_start = time.time()
-            response = self._call_with_retry(
-                lambda: self.client.messages.create(
-                    model=self.model,
-                    max_tokens=max_tokens or self.max_tokens,
-                    system=system_prompt,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "image",
-                                    "source": {
-                                        "type": "base64",
-                                        "media_type": media_type,
-                                        "data": image_base64,
+            if self.provider == "anthropic":
+                response = self._call_with_retry(
+                    lambda: self.client.messages.create(
+                        model=self.model,
+                        max_tokens=max_tokens or self.max_tokens,
+                        system=system_prompt,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "image",
+                                        "source": {
+                                            "type": "base64",
+                                            "media_type": media_type,
+                                            "data": image_base64,
+                                        },
                                     },
-                                },
-                                {"type": "text", "text": user_message},
-                            ],
-                        }
-                    ],
-                ),
-                call_label=f"complete_with_image (call #{self._call_count})",
-            )
+                                    {"type": "text", "text": user_message},
+                                ],
+                            }
+                        ],
+                    ),
+                    call_label=f"complete_with_image (call #{self._call_count})",
+                )
+                text = response.content[0].text
+            else:
+                text = self._ollama_chat(
+                    system_prompt=system_prompt,
+                    user_message=user_message,
+                    max_tokens=max_tokens or self.max_tokens,
+                    temperature=0.2,
+                    image_base64=image_base64,
+                )
             call_duration = time.time() - call_start
-            text = response.content[0].text
             logger.info("AI image response received in %.1fs (%d chars)",
                         call_duration, len(text))
             self._save_exchange_log(
@@ -217,8 +312,8 @@ class AIClient:
                 error=None,
             )
             return text
-        except anthropic.APIError as e:
-            logger.error("Claude API error (with image): %s", e)
+        except Exception as e:
+            logger.error("AI provider error with image (%s): %s", self.provider, e)
             self._save_exchange_log(
                 call_number=self._call_count,
                 system_prompt=system_prompt,
