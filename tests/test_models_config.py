@@ -154,7 +154,9 @@ class TestFrameworkConfig:
         assert config.max_execution_time_seconds == 1800
         assert config.max_parallel_contexts == 3
         assert config.selector_timeout_seconds == 10
+        assert config.ai_provider == "anthropic"
         assert config.ai_model == "claude-opus-4-6"
+        assert config.ai_base_url is None
         assert config.ai_max_fallback_calls_per_test == 3
         assert config.ai_max_planning_tokens == 32000
         assert config.staleness_threshold_days == 7
@@ -179,11 +181,23 @@ class TestFrameworkConfig:
         """Test FrameworkConfig with custom AI settings."""
         config = FrameworkConfig(
             target_url="https://example.com",
+            ai_provider="ollama",
             ai_model="claude-opus-4-6",
+            ai_base_url="http://localhost:11434",
             ai_max_planning_tokens=16000,
         )
+        assert config.ai_provider == "ollama"
         assert config.ai_model == "claude-opus-4-6"
+        assert config.ai_base_url == "http://localhost:11434"
         assert config.ai_max_planning_tokens == 16000
+
+    def test_invalid_ai_provider(self):
+        """Test FrameworkConfig rejects unsupported AI providers."""
+        with pytest.raises(ValidationError, match="ai_provider must be one of"):
+            FrameworkConfig(
+                target_url="https://example.com",
+                ai_provider="openai",
+            )
 
     def test_custom_viewports(self):
         """Test FrameworkConfig with custom viewports."""
