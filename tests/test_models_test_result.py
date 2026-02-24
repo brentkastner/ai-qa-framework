@@ -380,6 +380,33 @@ class TestTestResult:
         assert len(result.precondition_results) == 1
 
 
+    def test_potentially_flaky_default_false(self):
+        """Test potentially_flaky defaults to False."""
+        result = TestResult(
+            test_id="t1", test_name="Test", category="functional", result="pass",
+        )
+        assert result.potentially_flaky is False
+
+    def test_potentially_flaky_set_true(self):
+        """Test potentially_flaky can be set to True."""
+        result = TestResult(
+            test_id="t1", test_name="Test", category="functional", result="fail",
+            potentially_flaky=True,
+        )
+        assert result.potentially_flaky is True
+
+    def test_potentially_flaky_serialization(self):
+        """Test potentially_flaky survives serialization round-trip."""
+        result = TestResult(
+            test_id="t1", test_name="Test", category="functional", result="fail",
+            potentially_flaky=True,
+        )
+        data = result.model_dump()
+        assert data["potentially_flaky"] is True
+        restored = TestResult(**data)
+        assert restored.potentially_flaky is True
+
+
 class TestRunResult:
     """Tests for RunResult model."""
 

@@ -68,6 +68,7 @@ class TestResult(BaseModel):
     assertions_passed: int = 0
     assertions_failed: int = 0
     assertions_total: int = 0
+    potentially_flaky: bool = False
 
 
 class RunResult(BaseModel):

@@ -1,32 +1,35 @@
-.claude
+# OS / local tooling
 .DS_Store
-.qa-framework
-qa-framework
-qa-reports
-runs
-.coverage
+.claude
 
+# Runtime output
+.qa-framework/
+qa-framework/
+qa-reports/
+runs/
+.playwright/
 
-# Don't check in the config file
+# Local config
 qa-config.json
+.env
 
-# Byte-compiled / optimized / DLL files
+# Python artifacts
 __pycache__/
 *.py[cod]
-
-# Test cache
-.pytest_cache
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
 
 # Build artifacts
 *.egg-info/
 dist/
 build/
 
-# Environment
-.env
+# Virtual environments
 .venv/
 venv/
 
-#AI Stuff
+# Project-local notes
 CLAUDE.md
 IMPROVEMENT_PLAN.md

@@ -67,23 +67,31 @@ async def create_stealth_context(
     viewport: dict,
     user_agent: Optional[str] = None,
     storage_state: Optional[dict | str] = None,
+    record_video_dir: str | None = None,
 ) -> BrowserContext:
     """Create a browser context with stealth patches applied.
 
     Args:
         storage_state: Optional Playwright storage state (cookies + localStorage)
             to seed the context with. Accepts a dict or a path to a JSON file.
+        record_video_dir: Optional directory path for Playwright video recording.
+            When provided, all pages in this context will be recorded as .webm files.
     """
-    context = await browser.new_context(
-        viewport=viewport,
-        user_agent=user_agent or DEFAULT_USER_AGENT,
-        locale="en-US",
-        timezone_id="America/New_York",
-        extra_http_headers={
+    context_kwargs: dict = {
+        "viewport": viewport,
+        "user_agent": user_agent or DEFAULT_USER_AGENT,
+        "locale": "en-US",
+        "timezone_id": "America/New_York",
+        "extra_http_headers": {
             "Accept-Language": "en-US,en;q=0.9",
         },
-        storage_state=storage_state,
-    )
+        "storage_state": storage_state,
+    }
+    if record_video_dir:
+        context_kwargs["record_video_dir"] = record_video_dir
+        context_kwargs["record_video_size"] = viewport
+
+    context = await browser.new_context(**context_kwargs)
     await context.add_init_script(_STEALTH_INIT_SCRIPT)
     return context
 

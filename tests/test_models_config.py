@@ -154,7 +154,9 @@ class TestFrameworkConfig:
         assert config.max_execution_time_seconds == 1800
         assert config.max_parallel_contexts == 3
         assert config.selector_timeout_seconds == 10
+        assert config.ai_provider == "anthropic"
         assert config.ai_model == "claude-opus-4-6"
+        assert config.ai_base_url is None
         assert config.ai_max_fallback_calls_per_test == 3
         assert config.ai_max_planning_tokens == 32000
         assert config.staleness_threshold_days == 7
@@ -165,7 +167,7 @@ class TestFrameworkConfig:
         assert config.security_max_probe_depth == 2
         assert config.report_formats == ["html", "json"]
         assert config.report_output_dir == "./qa-reports"
-        assert config.capture_video is False
+        assert config.capture_video == "on_failure"
 
     def test_custom_categories(self):
         """Test FrameworkConfig with custom categories."""
@@ -179,11 +181,23 @@ class TestFrameworkConfig:
         """Test FrameworkConfig with custom AI settings."""
         config = FrameworkConfig(
             target_url="https://example.com",
+            ai_provider="ollama",
             ai_model="claude-opus-4-6",
+            ai_base_url="http://localhost:11434",
             ai_max_planning_tokens=16000,
         )
+        assert config.ai_provider == "ollama"
         assert config.ai_model == "claude-opus-4-6"
+        assert config.ai_base_url == "http://localhost:11434"
         assert config.ai_max_planning_tokens == 16000
+
+    def test_invalid_ai_provider(self):
+        """Test FrameworkConfig rejects unsupported AI providers."""
+        with pytest.raises(ValidationError, match="ai_provider must be one of"):
+            FrameworkConfig(
+                target_url="https://example.com",
+                ai_provider="openai",
+            )
 
     def test_custom_viewports(self):
         """Test FrameworkConfig with custom viewports."""
@@ -302,3 +316,50 @@ class TestFrameworkConfigFileOperations:
         assert loaded.max_tests_per_run == original.max_tests_per_run
         assert loaded.visual_diff_tolerance == original.visual_diff_tolerance
         assert loaded.hints == original.hints
+
+
+class TestCaptureVideoConfig:
+    """Tests for capture_video field validation and backward compatibility."""
+
+    def test_default_is_on_failure(self):
+        """Default capture_video is 'on_failure'."""
+        config = FrameworkConfig(target_url="https://example.com")
+        assert config.capture_video == "on_failure"
+
+    def test_accepts_off(self):
+        config = FrameworkConfig(target_url="https://example.com", capture_video="off")
+        assert config.capture_video == "off"
+
+    def test_accepts_on_failure(self):
+        config = FrameworkConfig(target_url="https://example.com", capture_video="on_failure")
+        assert config.capture_video == "on_failure"
+
+    def test_accepts_always(self):
+        config = FrameworkConfig(target_url="https://example.com", capture_video="always")
+        assert config.capture_video == "always"
+
+    def test_case_insensitive(self):
+        config = FrameworkConfig(target_url="https://example.com", capture_video="ON_FAILURE")
+        assert config.capture_video == "on_failure"
+
+    def test_bool_false_maps_to_off(self):
+        """Backward compat: false → 'off'."""
+        config = FrameworkConfig(target_url="https://example.com", capture_video=False)
+        assert config.capture_video == "off"
+
+    def test_bool_true_maps_to_on_failure(self):
+        """Backward compat: true → 'on_failure'."""
+        config = FrameworkConfig(target_url="https://example.com", capture_video=True)
+        assert config.capture_video == "on_failure"
+
+    def test_invalid_string_raises(self):
+        with pytest.raises(ValidationError, match="capture_video"):
+            FrameworkConfig(target_url="https://example.com", capture_video="invalid")
+
+    def test_round_trip_preserves_value(self, tmp_path):
+        """Save/load cycle preserves capture_video string value."""
+        config = FrameworkConfig(target_url="https://example.com", capture_video="always")
+        path = tmp_path / "config.json"
+        config.save(path)
+        loaded = FrameworkConfig.load(path)
+        assert loaded.capture_video == "always"

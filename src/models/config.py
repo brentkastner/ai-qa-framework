@@ -77,7 +77,9 @@ class FrameworkConfig(BaseModel):
     selector_timeout_seconds: int = 10
 
     # AI settings
+    ai_provider: str = "anthropic"
     ai_model: str = "claude-opus-4-6"
+    ai_base_url: Optional[str] = None
     ai_max_fallback_calls_per_test: int = 3
     ai_max_planning_tokens: int = 32000  # Increased to support large test plans
 
@@ -110,7 +112,34 @@ class FrameworkConfig(BaseModel):
     # Reporting
     report_formats: list[str] = Field(default_factory=lambda: ["html", "json"])
     report_output_dir: str = "./qa-reports"
-    capture_video: bool = False
+    capture_video: str = "on_failure"
+
+    @field_validator("capture_video", mode="before")
+    @classmethod
+    def normalize_capture_video(cls, v: str | bool) -> str:
+        """Accept bool for backward compat; normalize to string enum."""
+        if isinstance(v, bool):
+            return "on_failure" if v else "off"
+        if isinstance(v, str):
+            v_lower = v.lower().strip()
+            valid = {"off", "on_failure", "always"}
+            if v_lower not in valid:
+                raise ValueError(
+                    f"capture_video must be one of {valid}, got '{v}'"
+                )
+            return v_lower
+        raise ValueError(f"capture_video must be str or bool, got {type(v).__name__}")
+
+    @field_validator("ai_provider", mode="before")
+    @classmethod
+    def normalize_ai_provider(cls, v: str) -> str:
+        if not isinstance(v, str):
+            raise ValueError(f"ai_provider must be str, got {type(v).__name__}")
+        provider = v.strip().lower()
+        valid = {"anthropic", "ollama"}
+        if provider not in valid:
+            raise ValueError(f"ai_provider must be one of {valid}, got '{v}'")
+        return provider
 
     # Scope
     include_url_patterns: list[str] = Field(default_factory=list)

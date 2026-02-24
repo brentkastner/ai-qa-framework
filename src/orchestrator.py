@@ -43,7 +43,9 @@ class Orchestrator:
         self.ai_client: AIClient | None = None
         try:
             self.ai_client = AIClient(
+                provider=config.ai_provider,
                 model=config.ai_model,
+                base_url=config.ai_base_url,
                 max_tokens=config.ai_max_planning_tokens,
             )
         except EnvironmentError as e:
