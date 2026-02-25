@@ -21,26 +21,26 @@ REQUIRED RESPONSE FORMAT (plain JSON, no markdown fences):
   "test_cases": [
     {
       "test_id": "string (unique ID like tc_001)",
-      "name": "string (human-readable name)",
-      "description": "string (what this test verifies)",
-      "category": "functional | visual | security",
+      "name": "string (human-readable name; for api category use format '[METHOD] <short description>', e.g. '[GET] Fetch user profile')",
+      "description": "string (what this test verifies; for api category include the HTTP method, full endpoint URL, and what the test asserts, e.g. 'Sends a GET request to /api/users and verifies the response returns status 200 with a JSON array')",
+      "category": "functional | visual | security | api",
       "priority": 1-5,
       "target_page_id": "string (page_id from Site Model)",
       "coverage_signature": "string (abstract description for registry matching)",
       "requires_auth": true,
       "preconditions": [
         {
-          "action_type": "navigate | click | fill | select | hover | scroll | wait | screenshot | keyboard",
-          "selector": "string or null",
-          "value": "string or null",
+          "action_type": "navigate | click | fill | select | hover | scroll | wait | screenshot | keyboard | api_get | api_post | api_put | api_delete | api_patch",
+          "selector": "string or null  (for API actions: the full endpoint URL goes here)",
+          "value": "string or null     (for api_post/put/patch: JSON-encoded request body)",
           "description": "string"
         }
       ],
-      "steps": [ (same Action schema as preconditions) ],
+      "steps": [ "(same Action schema as preconditions)" ],
       "assertions": [
         {
-          "assertion_type": "element_visible | element_hidden | text_contains | text_equals | text_matches | url_matches | screenshot_diff | element_count | network_request_made | no_console_errors | response_status | ai_evaluate | page_title_contains | page_loaded",
-          "selector": "string or null",
+          "assertion_type": "element_visible | element_hidden | text_contains | text_equals | text_matches | url_matches | screenshot_diff | element_count | network_request_made | no_console_errors | response_status | ai_evaluate | page_title_contains | page_loaded | response_body_contains | response_json_path | response_header",
+          "selector": "string or null  (for response_json_path: dot-notation path e.g. 'data.id'; for response_header: header name)",
           "expected_value": "string or null",
           "tolerance": "float or null",
           "description": "string"
@@ -58,10 +58,22 @@ REQUIRED RESPONSE FORMAT (plain JSON, no markdown fences):
 1. **Functional tests:** Test form submissions (valid and invalid data), navigation, CRUD operations, search/filter, pagination, modals, multi-step workflows, and auth flows.
 2. **Visual tests:** Use screenshot_diff assertions to compare against baselines. IMPORTANT: Always add a wait step of at least 2000ms before screenshot assertions to allow fonts, images, and animations to fully load. Use element_visible assertions to verify key elements are present. Test responsive behavior across viewports. For screenshot_diff assertions, set tolerance to null (uses default 0.05).
 3. **Security tests:** Inject XSS payloads into form fields and verify sanitization. Check HTTPS enforcement, cookie security attributes, open redirect vectors, and error page information leakage.
+4. **API tests:** When the site model includes an `api_endpoints` array, generate direct HTTP tests using the API action types (`api_get`, `api_post`, `api_put`, `api_delete`, `api_patch`). These tests make real HTTP calls — they do NOT open a browser page or use visual assertions.
+   - **CRITICAL: Any test that uses `api_get`, `api_post`, `api_put`, `api_delete`, or `api_patch` action types MUST have `category: "api"`**
+   - **Name format:** Always use `[METHOD] <short description>` (e.g. `[GET] List products`, `[POST] Create order`, `[DELETE] Remove user`).
+   - **Description format:** Always describe the HTTP method, the full endpoint URL, and what is being asserted (e.g. `"Sends a POST request to /api/orders with a valid payload and verifies the response returns status 201 with the created order ID"`).
+   - Put the full endpoint URL in the `selector` field of each action.
+   - For POST/PUT/PATCH, put the JSON-encoded request body in the `value` field.
+   - Use `response_status` assertions to verify the HTTP status code (expected_value = status code as a string, e.g. `"200"`).
+   - Use `response_json_path` to assert values in the JSON body (selector = dot-notation path like `"data.id"`, expected_value = expected substring).
+   - Use `response_body_contains` to assert a substring appears anywhere in the response body.
+   - Use `response_header` to assert a response header is present (selector = header name, expected_value = expected substring in the value).
+   - Focus on endpoints observed during the crawl — do not invent endpoints that are not in the site model.
+   - Do NOT use `screenshot_diff`, `element_visible`, `page_loaded`, or other browser assertions in API tests.
 4. **Prioritization:** Forms and interactive elements get higher priority. Static pages get lower priority. Recently failed areas get highest priority.
 5. **Selectors:** Prefer data-testid attributes, then ARIA roles/labels, then stable CSS selectors. Avoid fragile positional selectors.
 6. **Test data:** Generate realistic test data for form fills. Use invalid data for negative tests (empty required fields, malformed emails, XSS payloads for security). When a field needs a unique value (e.g., usernames, IDs, vault names), use the dynamic variable `{{$timestamp}}` in the value string (e.g., `"testuser-{{$timestamp}}"`) — it will be replaced with a Unix epoch timestamp at runtime to ensure uniqueness.
-7. **Budget:** Respect the max_tests limit. Allocate budget proportionally: ~50% functional, ~30% visual, ~20% security (adjustable by hints).
+7. **Budget:** Respect the max_tests limit. ONLY generate tests for the categories listed in the Configuration section — never generate tests for any other category. Allocate the test budget proportionally across those categories (adjustable by hints). Example split when all four are enabled: ~40% functional, ~20% visual, ~20% security, ~20% api.
 8. **Assertion robustness:** Prefer behavioral/structural assertions over text matching. This is critical for reliable tests.
    - After form submissions: assert URL changed (url_matches), form disappeared (element_hidden), or new UI appeared (element_visible). Do NOT assert for specific success/error text you have not observed on the site.
    - For login flows: assert URL navigated away from the login page, or a logout/profile element appeared, rather than checking for "success" or "welcome" text.

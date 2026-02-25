@@ -416,3 +416,130 @@ class TestValidateTestPlan:
         assert any("category" in e.lower() for e in errors)
         assert any("priority" in e.lower() for e in errors)
         assert any("action_type" in e.lower() for e in errors)
+
+
+class TestValidateApiTests:
+    """Tests for API-specific validation rules."""
+
+    def _make_api_plan(self, test_cases):
+        return TestPlanModel(
+            plan_id="plan-api",
+            generated_at="2025-01-01T00:00:00Z",
+            target_url="https://example.com",
+            test_cases=test_cases,
+        )
+
+    def test_valid_api_test_passes(self):
+        tc = TestCaseModel(
+            test_id="tc_api_001",
+            name="[GET] List users",
+            category="api",
+            steps=[Action(
+                action_type="api_get",
+                selector="http://localhost/api/users",
+            )],
+            assertions=[Assertion(
+                assertion_type="response_status",
+                expected_value="200",
+            )],
+        )
+        errors = validate_test_plan(self._make_api_plan([tc]))
+        assert errors == []
+
+    def test_all_api_action_types_are_valid(self):
+        for method in ("api_get", "api_post", "api_put", "api_delete", "api_patch"):
+            tc = TestCaseModel(
+                test_id=f"tc_{method}",
+                name=f"[{method.split('_')[1].upper()}] test",
+                category="api",
+                steps=[Action(action_type=method, selector="http://localhost/api/x")],
+                assertions=[Assertion(assertion_type="response_status", expected_value="200")],
+            )
+            errors = validate_test_plan(self._make_api_plan([tc]))
+            assert not any("invalid action_type" in e.lower() for e in errors), \
+                f"{method} should be a valid action type"
+
+    def test_all_api_assertion_types_are_valid(self):
+        for atype in ("response_status", "response_body_contains", "response_json_path", "response_header"):
+            tc = TestCaseModel(
+                test_id=f"tc_{atype}",
+                name="[GET] test",
+                category="api",
+                steps=[Action(action_type="api_get", selector="http://localhost/api/x")],
+                assertions=[Assertion(assertion_type=atype, selector="key", expected_value="val")],
+            )
+            errors = validate_test_plan(self._make_api_plan([tc]))
+            assert not any("invalid" in e.lower() and "assertion" in e.lower() for e in errors), \
+                f"{atype} should be a valid assertion type"
+
+    def test_api_action_without_url_fails(self):
+        tc = TestCaseModel(
+            test_id="tc_no_url",
+            name="[GET] missing url",
+            category="api",
+            steps=[Action(action_type="api_get", selector=None)],
+            assertions=[Assertion(assertion_type="response_status", expected_value="200")],
+        )
+        errors = validate_test_plan(self._make_api_plan([tc]))
+        assert any("requires a url" in e.lower() for e in errors)
+
+    def test_api_test_name_without_bracket_format_fails(self):
+        tc = TestCaseModel(
+            test_id="tc_bad_name",
+            name="Get all users",  # missing [METHOD] prefix
+            category="api",
+            steps=[Action(action_type="api_get", selector="http://localhost/api/users")],
+            assertions=[Assertion(assertion_type="response_status", expected_value="200")],
+        )
+        errors = validate_test_plan(self._make_api_plan([tc]))
+        assert any("[method]" in e.lower() for e in errors)
+
+    def test_api_test_with_correct_name_format_passes(self):
+        for name in ["[GET] List items", "[POST] Create user", "[DELETE] Remove item", "[PATCH] Update"]:
+            tc = TestCaseModel(
+                test_id=f"tc_{name[:5]}",
+                name=name,
+                category="api",
+                steps=[Action(action_type="api_get", selector="http://localhost/api/x")],
+                assertions=[Assertion(assertion_type="response_status", expected_value="200")],
+            )
+            errors = validate_test_plan(self._make_api_plan([tc]))
+            assert not any("[method]" in e.lower() for e in errors), \
+                f"Name '{name}' should pass format check"
+
+    def test_api_test_with_browser_assertion_fails(self):
+        tc = TestCaseModel(
+            test_id="tc_bad_assert",
+            name="[GET] bad assertion",
+            category="api",
+            steps=[Action(action_type="api_get", selector="http://localhost/api/x")],
+            assertions=[Assertion(assertion_type="element_visible", selector=".foo")],
+        )
+        errors = validate_test_plan(self._make_api_plan([tc]))
+        assert any("browser assertion" in e.lower() for e in errors)
+
+    def test_api_test_actions_in_preconditions_only_no_step_error(self):
+        """API test with actions only in preconditions should not raise 'no steps defined'."""
+        tc = TestCaseModel(
+            test_id="tc_precond_only",
+            name="[GET] preconditions only",
+            category="api",
+            preconditions=[Action(action_type="api_get", selector="http://localhost/api/x")],
+            steps=[],
+            assertions=[Assertion(assertion_type="response_status", expected_value="200")],
+        )
+        errors = validate_test_plan(self._make_api_plan([tc]))
+        assert not any("no steps" in e.lower() for e in errors)
+
+    def test_api_category_detected_via_action_type(self):
+        """A test with api_* actions but category='functional' is still treated as API for validation."""
+        tc = TestCaseModel(
+            test_id="tc_mislabeled",
+            name="Get users",  # wrong format — should be flagged
+            category="functional",
+            steps=[Action(action_type="api_get", selector="http://localhost/api/users")],
+            assertions=[Assertion(assertion_type="response_status", expected_value="200")],
+        )
+        errors = validate_test_plan(self._make_api_plan([tc]))
+        # Should flag the name format issue because it detected api actions
+        assert any("[method]" in e.lower() for e in errors)

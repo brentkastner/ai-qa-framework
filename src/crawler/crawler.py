@@ -758,6 +758,8 @@ class Crawler:
         self, page: Page, nr_list: list[NetworkRequest]
     ) -> None:
         """Attach a network response listener to a page."""
+        backend_url = self.config.backend_url
+
         async def on_response(response):
             try:
                 req = response.request
@@ -769,6 +771,9 @@ class Crawler:
                     content_type=response.headers.get("content-type", ""),
                 ))
                 if req.resource_type in ("xhr", "fetch"):
+                    is_own = bool(
+                        backend_url and req.url.startswith(backend_url)
+                    )
                     key = f"{req.method}:{urlparse(req.url).path}"
                     if key not in self._api_endpoints:
                         self._api_endpoints[key] = APIEndpoint(
@@ -776,6 +781,7 @@ class Crawler:
                             method=req.method,
                             response_content_type=response.headers.get("content-type"),
                             status_codes_seen=[response.status],
+                            is_own_backend=is_own,
                         )
                     else:
                         ep = self._api_endpoints[key]

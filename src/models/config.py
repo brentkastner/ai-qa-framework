@@ -56,6 +56,9 @@ class FrameworkConfig(BaseModel):
     # Target
     target_url: str
 
+    # Backend URL — when set, captured API endpoints are tagged with is_own_backend
+    backend_url: Optional[str] = None
+
     # Authentication
     auth: Optional[AuthConfig] = None
 
@@ -64,7 +67,7 @@ class FrameworkConfig(BaseModel):
 
     # Test categories
     categories: list[str] = Field(
-        default_factory=lambda: ["functional", "visual", "security"]
+        default_factory=lambda: ["functional", "visual", "security", "api"]
     )
 
     # Execution limits

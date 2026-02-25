@@ -219,6 +219,31 @@ def generate_html_report(
             items += f"<li><strong>{html.escape(r.test_name)}</strong> ({r.category}): {r.previous_result} &rarr; {r.current_result}{reason}</li>"
         reg_section = f'<div class="regressions"><h2>&#9888; Regressions ({len(regressions)})</h2><ul>{items}</ul></div>'
 
+    # Test type breakdown
+    category_counts: dict[str, int] = {}
+    for r in run_result.test_results:
+        category_counts[r.category] = category_counts.get(r.category, 0) + 1
+
+    category_order = ["functional", "visual", "security", "api"]
+    type_stats_html = ""
+    for cat in category_order:
+        count = category_counts.get(cat, 0)
+        if count:
+            type_stats_html += f'<div class="stat"><div class="value">{count}</div><div class="label">{cat.capitalize()}</div></div>'
+    # Include any unexpected categories too
+    for cat, count in category_counts.items():
+        if cat not in category_order:
+            type_stats_html += f'<div class="stat"><div class="value">{count}</div><div class="label">{cat.capitalize()}</div></div>'
+
+    # Category filter buttons
+    category_filter_btns = ""
+    for cat in category_order:
+        if category_counts.get(cat, 0):
+            category_filter_btns += f'<button class="filter-btn filter-cat-btn" onclick="filterByCategory(\'{cat}\')">{cat.capitalize()}</button>'
+    for cat in category_counts:
+        if cat not in category_order:
+            category_filter_btns += f'<button class="filter-btn filter-cat-btn" onclick="filterByCategory(\'{cat}\')">{cat.capitalize()}</button>'
+
     # Test cards
     test_cards = []
     for r in run_result.test_results:
@@ -255,6 +280,7 @@ def generate_html_report(
   .badge.functional {{ background: #dbeafe; color: #1e40af; }}
   .badge.visual {{ background: #e0e7ff; color: #3730a3; }}
   .badge.security {{ background: #fce7f3; color: #9d174d; }}
+  .badge.api {{ background: #d1fae5; color: #065f46; }}
   /* AI / Regression boxes */
   .ai-summary {{ background: var(--card); border-radius: 8px; padding: 1.2rem; margin-bottom: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); border-left: 4px solid var(--accent); }}
   .ai-summary h2 {{ font-size: 1rem; color: var(--accent); margin-bottom: 0.8rem; }}
@@ -318,6 +344,9 @@ def generate_html_report(
   .screenshot-label {{ font-size: 0.75rem; color: var(--muted); margin-top: 0.2rem; }}
   /* Console */
   .console-log {{ background: #1e293b; color: #f1f5f9; padding: 0.8rem; border-radius: 6px; font-size: 0.78rem; overflow-x: auto; max-height: 200px; overflow-y: auto; }}
+  /* Section heading */
+  .section-heading {{ font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin: 1rem 0 0.4rem; }}
+  .type-summary {{ margin-bottom: 1.5rem; }}
   /* Filter bar */
   .filter-bar {{ display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }}
   .filter-btn {{ padding: 0.3rem 0.8rem; border-radius: 6px; border: 1px solid var(--border); background: var(--card); cursor: pointer; font-size: 0.82rem; }}
@@ -337,6 +366,11 @@ def generate_html_report(
     <div class="stat error"><div class="value">{run_result.errors}</div><div class="label">Errors</div></div>
   </div>
 
+  <h3 class="section-heading">By Test Type</h3>
+  <div class="summary type-summary">
+    {type_stats_html}
+  </div>
+
   {ai_section}
   {reg_section}
 
@@ -346,6 +380,7 @@ def generate_html_report(
     <button class="filter-btn" onclick="filterTests('error')">Errors</button>
     <button class="filter-btn" onclick="filterTests('pass')">Passed</button>
     <button class="filter-btn" onclick="filterTests('skip')">Skipped</button>
+    {category_filter_btns}
     <button class="filter-btn" onclick="expandAll()">Expand All</button>
     <button class="filter-btn" onclick="collapseAll()">Collapse All</button>
   </div>
@@ -363,6 +398,14 @@ function filterTests(status) {{
     if (status === 'all') {{ card.style.display = ''; return; }}
     const badge = card.querySelector('.test-header .badge');
     card.style.display = badge && badge.textContent.trim().toLowerCase() === status ? '' : 'none';
+  }});
+}}
+function filterByCategory(cat) {{
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  document.querySelectorAll('.test-card').forEach(card => {{
+    const catBadge = card.querySelector('.test-header .badge.' + cat);
+    card.style.display = catBadge ? '' : 'none';
   }});
 }}
 function expandAll() {{

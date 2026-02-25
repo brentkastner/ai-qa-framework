@@ -49,6 +49,7 @@ class APIEndpoint(BaseModel):
     request_content_type: Optional[str] = None
     response_content_type: Optional[str] = None
     status_codes_seen: list[int] = Field(default_factory=list)
+    is_own_backend: bool = False
 
 
 class AuthFlow(BaseModel):

@@ -149,7 +149,7 @@ class TestFrameworkConfig:
     def test_default_values(self):
         """Test FrameworkConfig has correct default values."""
         config = FrameworkConfig(target_url="https://example.com")
-        assert config.categories == ["functional", "visual", "security"]
+        assert config.categories == ["functional", "visual", "security", "api"]
         assert config.max_tests_per_run == 20
         assert config.max_execution_time_seconds == 1800
         assert config.max_parallel_contexts == 3

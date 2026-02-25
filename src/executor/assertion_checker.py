@@ -6,6 +6,7 @@ import base64
 import logging
 import re
 from pathlib import Path
+from typing import Any
 
 from playwright.async_api import Page
 
@@ -396,6 +397,122 @@ def _check_response_status(assertion: Assertion, network_log: list[dict] | None)
         if req.get("status") == expected:
             return AssertionResult(True, f"Found response with status {expected}")
     return AssertionResult(False, f"No response with status {expected}")
+
+
+# ---------------------------------------------------------------------------
+# API assertion checker (no browser page — operates on HTTP response data)
+# ---------------------------------------------------------------------------
+
+def check_api_assertion(assertion: Assertion, response_data: dict[str, Any]) -> AssertionResult:
+    """Evaluate an assertion against HTTP response data from an API call.
+
+    response_data keys:
+        status  (int)   — HTTP status code
+        headers (dict)  — response headers (lowercased keys)
+        body    (str)   — raw response text
+        json    (Any)   — parsed JSON body, or None
+        url     (str)   — request URL
+    """
+    try:
+        match assertion.assertion_type:
+            case "response_status":
+                return _check_api_status(assertion, response_data)
+            case "response_body_contains":
+                return _check_api_body_contains(assertion, response_data)
+            case "response_json_path":
+                return _check_api_json_path(assertion, response_data)
+            case "response_header":
+                return _check_api_header(assertion, response_data)
+            case _:
+                return AssertionResult(False, f"Unknown API assertion type: {assertion.assertion_type}")
+    except Exception as e:
+        logger.debug("API assertion error: %s — %s", assertion.assertion_type, e)
+        return AssertionResult(False, f"API assertion error: {e}")
+
+
+def _check_api_status(assertion: Assertion, response_data: dict) -> AssertionResult:
+    if not assertion.expected_value:
+        return AssertionResult(False, "No expected status code in expected_value")
+    try:
+        expected = int(assertion.expected_value)
+    except ValueError:
+        return AssertionResult(False, f"expected_value '{assertion.expected_value}' is not a valid status code")
+    actual = response_data.get("status", 0)
+    if actual == expected:
+        return AssertionResult(True, f"Status {actual} matches expected {expected}")
+    return AssertionResult(False, f"Expected status {expected}, got {actual}")
+
+
+def _check_api_body_contains(assertion: Assertion, response_data: dict) -> AssertionResult:
+    if not assertion.expected_value:
+        return AssertionResult(False, "No expected_value for response_body_contains")
+    body = response_data.get("body", "")
+    if assertion.expected_value.lower() in body.lower():
+        return AssertionResult(True, f"Response body contains '{assertion.expected_value}'")
+    return AssertionResult(False, f"Response body does not contain '{assertion.expected_value}'")
+
+
+def _check_api_json_path(assertion: Assertion, response_data: dict) -> AssertionResult:
+    """Traverse a dot-notation path in the JSON response body.
+
+    selector      — dot-notation path, e.g. ``data.user.name`` or ``items.0.id``
+    expected_value — expected string value at that path (substring match);
+                     omit to just assert the path exists
+    """
+    if not assertion.selector:
+        return AssertionResult(False, "No JSON path provided in selector field (e.g. 'data.id')")
+    json_body = response_data.get("json")
+    if json_body is None:
+        return AssertionResult(False, "Response body is not valid JSON")
+
+    current: Any = json_body
+    for part in assertion.selector.split("."):
+        if isinstance(current, dict):
+            current = current.get(part)
+        elif isinstance(current, list):
+            try:
+                current = current[int(part)]
+            except (ValueError, IndexError):
+                return AssertionResult(False, f"Path '{assertion.selector}': index '{part}' out of range")
+        else:
+            return AssertionResult(False, f"Path '{assertion.selector}': cannot traverse into {type(current).__name__}")
+        if current is None:
+            return AssertionResult(False, f"Path '{assertion.selector}' is null or missing")
+
+    actual = str(current)
+    if not assertion.expected_value:
+        return AssertionResult(True, f"Path '{assertion.selector}' exists (value: '{actual[:80]}')")
+    if assertion.expected_value.lower() in actual.lower():
+        return AssertionResult(True, f"Path '{assertion.selector}' = '{actual[:80]}'")
+    return AssertionResult(
+        False,
+        f"Path '{assertion.selector}': expected '{assertion.expected_value}', got '{actual[:80]}'",
+    )
+
+
+def _check_api_header(assertion: Assertion, response_data: dict) -> AssertionResult:
+    """Assert a response header is present and optionally matches a value.
+
+    selector      — header name (case-insensitive)
+    expected_value — expected substring in the header value (optional)
+    """
+    if not assertion.selector:
+        return AssertionResult(False, "No header name provided in selector field")
+    headers: dict = response_data.get("headers", {})
+    header_val = next(
+        (v for k, v in headers.items() if k.lower() == assertion.selector.lower()),
+        None,
+    )
+    if header_val is None:
+        return AssertionResult(False, f"Header '{assertion.selector}' not found in response")
+    if not assertion.expected_value:
+        return AssertionResult(True, f"Header '{assertion.selector}' present: '{header_val}'")
+    if assertion.expected_value.lower() in header_val.lower():
+        return AssertionResult(True, f"Header '{assertion.selector}': '{header_val}'")
+    return AssertionResult(
+        False,
+        f"Header '{assertion.selector}': expected '{assertion.expected_value}', got '{header_val}'",
+    )
 
 
 async def _check_ai_evaluate(
