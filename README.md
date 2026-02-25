@@ -119,7 +119,7 @@ open qa-reports/report_*.html
 - **Functional tests** - Forms, navigation, workflows, CRUD
 - **Visual regression** - Screenshot baselines, responsive design
 - **Security checks** - XSS, HTTPS, cookies, headers
-- **API tests** - Direct HTTP calls against observed endpoints, with JSON path and status assertions
+- **API tests** - Direct HTTP calls against observed endpoints of the configured backend, with JSON path and status assertions
 - **Evidence collection** - Screenshots, logs, network activity
 
 **→ [See all features in detail](./OVERVIEW.md#key-features)**

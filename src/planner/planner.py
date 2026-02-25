@@ -56,8 +56,7 @@ class Planner:
 
         # Build config summary
         config_summary = (
-            f"Categories (ONLY generate tests for these categories — do not generate any others): "
-            f"{', '.join(self.config.categories)}\n"
+            f"Categories: {self.config.categories}\n"
             f"Max tests: {self.config.max_tests_per_run}\n"
             f"Visual diff tolerance: {self.config.visual_diff_tolerance}\n"
             f"Viewports: {json.dumps([v.model_dump() for v in self.config.viewports])}\n"
@@ -191,7 +190,6 @@ class Planner:
                 category = tc_data.get("category", "functional")
 
                 # Auto-correct: if any action is an API type, force category to "api"
-                # regardless of what the AI returned — mistagging causes runtime skips.
                 _api_action_types = {"api_get", "api_post", "api_put", "api_delete", "api_patch"}
                 all_actions = preconditions + steps
                 if any(a.action_type in _api_action_types for a in all_actions) and category != "api":
@@ -319,7 +317,7 @@ class Planner:
                     )],
                 ))
 
-        # API fallback tests — one GET per captured endpoint
+        # API fallback tests — one call per captured endpoint
         if "api" in self.config.categories:
             endpoints = site_model.api_endpoints
             if self.config.backend_url:
